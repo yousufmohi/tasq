@@ -50,7 +50,25 @@ func runWorker(t *testing.T, w *worker.Worker) (stop func()) {
 
 func newWorker(t *testing.T, rdb redis.UniversalClient, q string, conc int, h worker.Handler) *worker.Worker {
 	t.Helper()
-	w, err := worker.New(rdb, worker.Options{Queue: q, Concurrency: conc, Block: 100 * time.Millisecond}, h)
+	return newWorkerOpts(t, rdb, worker.Options{Queue: q, Concurrency: conc}, h)
+}
+
+// newWorkerOpts applies fast test defaults to any option left zero.
+func newWorkerOpts(t *testing.T, rdb redis.UniversalClient, o worker.Options, h worker.Handler) *worker.Worker {
+	t.Helper()
+	if o.Block == 0 {
+		o.Block = 100 * time.Millisecond
+	}
+	if o.RetryBase == 0 {
+		o.RetryBase = 10 * time.Millisecond
+	}
+	if o.RetryMax == 0 {
+		o.RetryMax = 50 * time.Millisecond
+	}
+	if o.PromoteInterval == 0 {
+		o.PromoteInterval = 20 * time.Millisecond
+	}
+	w, err := worker.New(rdb, o, h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,8 +200,7 @@ func TestRunDrainsInFlightOnCancel(t *testing.T) {
 	assertDrained(t, rdb, q)
 }
 
-// A panicking handler must not kill the worker. (In M1 the failed job stays
-// active in the PEL; M2 adds retries.)
+// A panicking handler must not kill the worker; the panic is a job failure.
 func TestHandlerPanicIsContained(t *testing.T) {
 	t.Parallel()
 	rdb := testutil.Shared(t)
@@ -191,7 +208,7 @@ func TestHandlerPanicIsContained(t *testing.T) {
 	c := taskq.NewClient(rdb)
 	ctx := context.Background()
 
-	boom, _ := c.Enqueue(ctx, q, taskq.EnqueueOptions{Type: "boom"})
+	boom, _ := c.Enqueue(ctx, q, taskq.EnqueueOptions{Type: "boom", MaxAttempts: 1})
 	ok, _ := c.Enqueue(ctx, q, taskq.EnqueueOptions{Type: "ok"})
 	runWorker(t, newWorker(t, rdb, q, 1, func(_ context.Context, j *taskq.Job) error {
 		if j.Type == "boom" {
@@ -203,9 +220,13 @@ func TestHandlerPanicIsContained(t *testing.T) {
 		j, err := c.GetJob(ctx, q, ok)
 		return err == nil && j.State == taskq.StateSucceeded
 	})
+	testutil.WaitFor(t, 10*time.Second, "panicked job dead-lettered", func() bool {
+		j, err := c.GetJob(ctx, q, boom)
+		return err == nil && j.State == taskq.StateDead
+	})
 	j, _ := c.GetJob(ctx, q, boom)
-	if j.State != taskq.StateActive {
-		t.Fatalf("panicked job state = %s, want active (no retries until M2)", j.State)
+	if !strings.Contains(j.LastError, "kaboom") {
+		t.Fatalf("last_error = %q, want the panic message", j.LastError)
 	}
 }
 

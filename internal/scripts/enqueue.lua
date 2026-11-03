@@ -2,7 +2,7 @@
 --
 -- KEYS[1] job hash   KEYS[2] stream
 -- ARGV[1] id  ARGV[2] queue  ARGV[3] type  ARGV[4] payload
--- ARGV[5] max_attempts  ARGV[6] priority
+-- ARGV[5] max_attempts  ARGV[6] priority  ARGV[7] timeout ms (0 = none)
 --
 -- Returns {'OK', created_ms} or {'EXISTS', ''}.
 --
@@ -17,7 +17,7 @@ local now = fmt(now_ms())
 local eid = redis.call('XADD', KEYS[2], '*', 'id', ARGV[1])
 redis.call('HSET', KEYS[1],
   'id', ARGV[1], 'queue', ARGV[2], 'type', ARGV[3], 'payload', ARGV[4],
-  'max_attempts', ARGV[5], 'priority', ARGV[6],
+  'max_attempts', ARGV[5], 'priority', ARGV[6], 'timeout_ms', ARGV[7],
   'state', 'pending', 'attempts', '0',
   'created_ms', now, 'run_at_ms', now, 'stream_entry', eid)
 return {'OK', now}

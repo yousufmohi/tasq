@@ -7,6 +7,7 @@ package scripts
 import (
 	_ "embed"
 	"fmt"
+	"strconv"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -20,12 +21,24 @@ var (
 	startSrc string
 	//go:embed complete.lua
 	completeSrc string
+	//go:embed fail.lua
+	failSrc string
+	//go:embed promote.lua
+	promoteSrc string
+	//go:embed replay.lua
+	replaySrc string
+	//go:embed purge.lua
+	purgeSrc string
 )
 
 var (
 	Enqueue  = redis.NewScript(prelude + enqueueSrc)
 	Start    = redis.NewScript(prelude + startSrc)
 	Complete = redis.NewScript(prelude + completeSrc)
+	Fail     = redis.NewScript(prelude + failSrc)
+	Promote  = redis.NewScript(prelude + promoteSrc)
+	Replay   = redis.NewScript(prelude + replaySrc)
+	Purge    = redis.NewScript(prelude + purgeSrc)
 )
 
 // Status extracts the leading status string from a script reply of the form
@@ -40,4 +53,16 @@ func Status(v any) (string, []any, error) {
 		return "", nil, fmt.Errorf("scripts: non-string status %T", arr[0])
 	}
 	return s, arr[1:], nil
+}
+
+// Int converts a script reply element (integer or numeric string) to int64.
+func Int(v any) (int64, error) {
+	switch x := v.(type) {
+	case int64:
+		return x, nil
+	case string:
+		return strconv.ParseInt(x, 10, 64)
+	default:
+		return 0, fmt.Errorf("scripts: not an integer: %T %v", v, v)
+	}
 }

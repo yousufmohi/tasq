@@ -22,17 +22,32 @@ type Job struct {
 	State       state.State
 	Attempts    int
 	MaxAttempts int
-	CreatedAt   time.Time // Redis clock
-	StartedAt   time.Time // Redis clock; zero until first start
-	FinishedAt  time.Time // Redis clock; zero until terminal
+	CreatedAt   time.Time     // Redis clock
+	RunAt       time.Time     // Redis clock; when the job became (or becomes) runnable
+	StartedAt   time.Time     // Redis clock; zero until first start
+	FinishedAt  time.Time     // Redis clock; zero until terminal
+	Timeout     time.Duration // per-attempt handler timeout; 0 = worker default
 	LastError   string
 	LeaseOwner  string
+
+	// IdemKey is the enqueue idempotency key, if the producer supplied one.
+	IdemKey string
 
 	// StreamEntry is the ID of the job's live stream entry, if any.
 	StreamEntry string
 	// LeaseToken fences state changes; only the worker holding the current
 	// token may complete, fail or release the job.
 	LeaseToken string
+}
+
+// IdempotencyKey is the key handlers should pass to downstream systems to
+// make side effects idempotent. It is identical on every delivery of the
+// job: the producer's idempotency key if one was given, else the job ID.
+func (j *Job) IdempotencyKey() string {
+	if j.IdemKey != "" {
+		return j.IdemKey
+	}
+	return j.ID
 }
 
 // NewID returns a random 128-bit hex identifier.
@@ -78,8 +93,17 @@ func FromMap(m map[string]string) (*Job, error) {
 		LeaseOwner:  m["lease_owner"],
 		LeaseToken:  m["lease_token"],
 		StreamEntry: m["stream_entry"],
+		IdemKey:     m["idem_key"],
 	}
 	var err error
+	if j.RunAt, err = ms(m, "run_at_ms"); err != nil {
+		return nil, err
+	}
+	var timeout int
+	if timeout, err = atoi(m, "timeout_ms"); err != nil {
+		return nil, err
+	}
+	j.Timeout = time.Duration(timeout) * time.Millisecond
 	if j.Attempts, err = atoi(m, "attempts"); err != nil {
 		return nil, err
 	}
