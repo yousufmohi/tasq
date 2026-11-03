@@ -62,6 +62,14 @@ type EnqueueOptions struct {
 	Payload     []byte
 	MaxAttempts int           // default DefaultMaxAttempts
 	Timeout     time.Duration // per-attempt handler timeout; 0 = worker default
+
+	// Delay makes the job runnable this long after Redis accepts it,
+	// measured on the Redis clock. RunAt is an absolute alternative; it is
+	// converted to a delay using the producer's clock, so clock skew between
+	// producer and Redis shifts it. At most one may be set. A job runs at
+	// its run time plus up to one promotion interval plus queue wait.
+	Delay time.Duration
+	RunAt time.Time
 }
 
 // Enqueue creates a job on queue and returns its ID. A nil error means Redis
@@ -83,12 +91,23 @@ func (c *Client) Enqueue(ctx context.Context, queue string, o EnqueueOptions) (s
 	if o.Timeout < 0 {
 		return "", fmt.Errorf("taskq: Timeout must be >= 0, got %v", o.Timeout)
 	}
+	if o.Delay < 0 {
+		return "", fmt.Errorf("taskq: Delay must be >= 0, got %v", o.Delay)
+	}
+	delay := o.Delay
+	if !o.RunAt.IsZero() {
+		if o.Delay != 0 {
+			return "", errors.New("taskq: set Delay or RunAt, not both")
+		}
+		delay = max(time.Until(o.RunAt), 0)
+	}
 	c.register(ctx, queue)
 	id := job.NewID()
 	prio := keys.DefaultPriority
 	res, err := scripts.Enqueue.Run(ctx, c.rdb,
-		[]string{keys.Job(queue, id), keys.Stream(queue, prio)},
+		[]string{keys.Job(queue, id), keys.Stream(queue, prio), keys.Sched(queue)},
 		id, queue, o.Type, o.Payload, o.MaxAttempts, prio, o.Timeout.Milliseconds(),
+		delay.Milliseconds(),
 	).Result()
 	if err != nil {
 		return "", fmt.Errorf("taskq: enqueue: %w", err)
