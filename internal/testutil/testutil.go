@@ -82,6 +82,14 @@ func Shared(t testing.TB) *redis.Client {
 	return shared.Client(t)
 }
 
+// SharedAddr returns the host:port of the shared container, starting it if
+// needed (for handing to worker subprocesses).
+func SharedAddr(t testing.TB) string {
+	t.Helper()
+	Shared(t)
+	return shared.Addr
+}
+
 // Main runs the tests and then terminates the shared container.
 func Main(m *testing.M) {
 	code := m.Run()

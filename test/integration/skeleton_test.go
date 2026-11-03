@@ -274,6 +274,27 @@ func deliver(t *testing.T, rdb redis.UniversalClient, q, consumer string) redis.
 	return res[0].Messages[0]
 }
 
+// startJob runs start.lua for a delivery of job id.
+func startJob(t *testing.T, rdb redis.UniversalClient, q, id, eid, consumer, token string) (string, []any) {
+	t.Helper()
+	return runStatus(t, scripts.Start, rdb,
+		[]string{keys.Job(q, id), keys.Stream(q, keys.DefaultPriority), keys.Dead(q)},
+		keys.Group, eid, consumer, token, state.SourcesCSV(state.Start))
+}
+
+// claimTo moves a pending entry to another consumer, as XAUTOCLAIM does
+// once the lease has expired.
+func claimTo(t *testing.T, rdb redis.UniversalClient, q, eid, consumer string) {
+	t.Helper()
+	err := rdb.XClaimJustID(context.Background(), &redis.XClaimArgs{
+		Stream: keys.Stream(q, keys.DefaultPriority), Group: keys.Group,
+		Consumer: consumer, MinIdle: 0, Messages: []string{eid},
+	}).Err()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func runStatus(t *testing.T, s *redis.Script, rdb redis.UniversalClient, keyz []string, args ...any) (string, []any) {
 	t.Helper()
 	res, err := s.Run(context.Background(), rdb, keyz, args...).Result()
@@ -302,13 +323,17 @@ func TestCompleteIsFencedByLeaseToken(t *testing.T) {
 	}
 	msg := deliver(t, rdb, q, "A")
 	k := []string{keys.Job(q, id), keys.Stream(q, keys.DefaultPriority)}
-	startSrc := state.SourcesCSV(state.Start)
 	completeSrc := state.SourcesCSV(state.Complete)
 
-	if st, _ := runStatus(t, scripts.Start, rdb, k, keys.Group, msg.ID, "A", "tokA", startSrc); st != "OK" {
+	if st, _ := startJob(t, rdb, q, id, msg.ID, "A", "tokA"); st != "OK" {
 		t.Fatalf("start A: %s", st)
 	}
-	if st, _ := runStatus(t, scripts.Start, rdb, k, keys.Group, msg.ID, "B", "tokB", startSrc); st != "OK" {
+	// A starting a delivery that B has not claimed must fail the owner check.
+	if st, rest := startJob(t, rdb, q, id, msg.ID, "B", "tokB"); st != "SKIP" || rest[0] != "not_owner" {
+		t.Fatalf("start by non-owner: %s %v, want SKIP not_owner", st, rest)
+	}
+	claimTo(t, rdb, q, msg.ID, "B") // what XAUTOCLAIM does after the lease expires
+	if st, _ := startJob(t, rdb, q, id, msg.ID, "B", "tokB"); st != "OK" {
 		t.Fatalf("start B (reclaim): %s", st)
 	}
 
@@ -354,13 +379,10 @@ func TestStartRejectsStaleEntry(t *testing.T) {
 	}
 	first := deliver(t, rdb, q, "A")
 	second := deliver(t, rdb, q, "A")
-	k := []string{keys.Job(q, id), s}
-	src := state.SourcesCSV(state.Start)
-
-	if st, rest := runStatus(t, scripts.Start, rdb, k, keys.Group, second.ID, "A", "t2", src); st != "SKIP" || rest[0] != "stale_entry" {
+	if st, rest := startJob(t, rdb, q, id, second.ID, "A", "t2"); st != "SKIP" || rest[0] != "stale_entry" {
 		t.Fatalf("rogue entry: %s %v", st, rest)
 	}
-	if st, _ := runStatus(t, scripts.Start, rdb, k, keys.Group, first.ID, "A", "t1", src); st != "OK" {
+	if st, _ := startJob(t, rdb, q, id, first.ID, "A", "t1"); st != "OK" {
 		t.Fatalf("real entry: %s", st)
 	}
 	if n := rdb.XLen(ctx, s).Val(); n != 1 {
@@ -379,8 +401,7 @@ func TestStartSkipsTerminalJob(t *testing.T) {
 	id, _ := c.Enqueue(ctx, q, taskq.EnqueueOptions{Type: "x"})
 	msg := deliver(t, rdb, q, "A")
 	rdb.HSet(ctx, keys.Job(q, id), "state", "succeeded")
-	k := []string{keys.Job(q, id), keys.Stream(q, keys.DefaultPriority)}
-	st, rest := runStatus(t, scripts.Start, rdb, k, keys.Group, msg.ID, "A", "t", state.SourcesCSV(state.Start))
+	st, rest := startJob(t, rdb, q, id, msg.ID, "A", "t")
 	if st != "SKIP" || rest[0] != "succeeded" {
 		t.Fatalf("got %s %v", st, rest)
 	}

@@ -48,13 +48,25 @@ type Options struct {
 	// their stream. Default 250ms (jittered ±20%).
 	PromoteInterval time.Duration
 
+	// VisibilityTimeout is how long a delivered job may go without a
+	// heartbeat before another worker reclaims it. It bounds crash recovery
+	// time; too short causes false reclaims (duplicates) during GC pauses
+	// or network blips. Default 30s.
+	VisibilityTimeout time.Duration
+	// HeartbeatInterval is how often leases are renewed. Default
+	// VisibilityTimeout/3; must be < VisibilityTimeout/2.
+	HeartbeatInterval time.Duration
+	// ReclaimInterval is how often this worker scans for jobs whose lease
+	// expired. Default VisibilityTimeout/4 (jittered ±20%).
+	ReclaimInterval time.Duration
+
 	// SkipPolicyCheck disables the startup check that Redis uses
 	// maxmemory-policy noeviction. Only for Redis deployments that block
 	// CONFIG GET and are known to be configured correctly.
 	SkipPolicyCheck bool
 }
 
-func (o *Options) setDefaults() {
+func (o *Options) setDefaults() error {
 	if o.Concurrency <= 0 {
 		o.Concurrency = 1
 	}
@@ -80,6 +92,20 @@ func (o *Options) setDefaults() {
 	if o.PromoteInterval <= 0 {
 		o.PromoteInterval = 250 * time.Millisecond
 	}
+	if o.VisibilityTimeout <= 0 {
+		o.VisibilityTimeout = 30 * time.Second
+	}
+	if o.HeartbeatInterval <= 0 {
+		o.HeartbeatInterval = o.VisibilityTimeout / 3
+	}
+	if o.ReclaimInterval <= 0 {
+		o.ReclaimInterval = o.VisibilityTimeout / 4
+	}
+	if o.HeartbeatInterval*2 >= o.VisibilityTimeout {
+		return fmt.Errorf("worker: HeartbeatInterval (%v) must be < VisibilityTimeout/2 (%v)",
+			o.HeartbeatInterval, o.VisibilityTimeout)
+	}
+	return nil
 }
 
 // Worker consumes one queue.
@@ -89,6 +115,11 @@ type Worker struct {
 	h      Handler
 	log    *slog.Logger
 	stream string
+	leases *leases
+
+	// reclaim state; touched only by the fetch loop goroutine.
+	reclaimCursor string
+	nextReclaim   time.Time
 }
 
 // New validates options and returns a Worker. It does not touch Redis.
@@ -99,18 +130,25 @@ func New(rdb redis.UniversalClient, opts Options, h Handler) (*Worker, error) {
 	if h == nil {
 		return nil, errors.New("worker: nil handler")
 	}
-	opts.setDefaults()
+	if err := opts.setDefaults(); err != nil {
+		return nil, err
+	}
 	return &Worker{
-		rdb:    rdb,
-		opts:   opts,
-		h:      h,
-		log:    opts.Logger.With("queue", opts.Queue, "consumer", opts.Consumer),
-		stream: keys.Stream(opts.Queue, keys.DefaultPriority),
+		rdb:           rdb,
+		opts:          opts,
+		h:             h,
+		log:           opts.Logger.With("queue", opts.Queue, "consumer", opts.Consumer),
+		stream:        keys.Stream(opts.Queue, keys.DefaultPriority),
+		leases:        newLeases(),
+		reclaimCursor: "0-0",
 	}, nil
 }
 
 // Consumer returns the consumer name this worker registers with.
 func (w *Worker) Consumer() string { return w.opts.Consumer }
+
+// InFlight returns the number of jobs currently running.
+func (w *Worker) InFlight() int { return w.leases.len() }
 
 // Run fetches and processes jobs until ctx is cancelled, then waits for
 // in-flight handlers to return.
@@ -121,15 +159,20 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err := w.ensureGroup(ctx); err != nil {
 		return err
 	}
-	w.log.Info("worker started", "concurrency", w.opts.Concurrency)
-
-	var bg sync.WaitGroup
-	bg.Add(1)
-	go func() { defer bg.Done(); w.promoteLoop(ctx) }()
+	w.log.Info("worker started", "concurrency", w.opts.Concurrency,
+		"visibility_timeout", w.opts.VisibilityTimeout)
 
 	// jobCtx outlives ctx so that cancelling Run lets in-flight jobs finish
-	// and be acknowledged instead of being abandoned mid-way.
-	jobCtx := context.WithoutCancel(ctx)
+	// and be acknowledged instead of being abandoned mid-way. Heartbeats
+	// must keep running while they drain, so they use it too.
+	jobCtx, stopJobs := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopJobs()
+
+	var bg sync.WaitGroup
+	bg.Add(2)
+	go func() { defer bg.Done(); w.promoteLoop(ctx) }()
+	go func() { defer bg.Done(); w.heartbeatLoop(jobCtx) }()
+
 	sem := make(chan struct{}, w.opts.Concurrency)
 	var wg sync.WaitGroup
 	backoff := 50 * time.Millisecond
@@ -139,11 +182,12 @@ func (w *Worker) Run(ctx context.Context) error {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			wg.Wait()
+			stopJobs()
 			bg.Wait()
 			w.log.Info("worker stopped")
 			return nil
 		}
-		msg, err := w.fetch(ctx)
+		d, err := w.fetch(ctx)
 		if err != nil {
 			<-sem
 			if ctx.Err() != nil {
@@ -155,7 +199,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			continue
 		}
 		backoff = 50 * time.Millisecond
-		if msg == nil {
+		if d == nil {
 			<-sem
 			continue
 		}
@@ -163,18 +207,21 @@ func (w *Worker) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			w.process(jobCtx, delivery{stream: w.stream, msg: *msg})
+			w.process(jobCtx, *d)
 		}()
 	}
 }
 
-// fetch reads at most one new entry. It returns (nil, nil) when the block
-// timeout expires with nothing to read.
+// fetch returns at most one delivery: a reclaimed entry whose lease expired,
+// if a reclaim scan is due and finds one, otherwise a new entry. It returns
+// (nil, nil) when the block timeout expires with nothing to read.
 //
 // If ctx is cancelled after Redis delivered an entry but before the reply
-// was read, the entry sits in this consumer's PEL; crash recovery reclaims
-// it.
-func (w *Worker) fetch(ctx context.Context) (*redis.XMessage, error) {
+// was read, the entry sits in this consumer's PEL and is reclaimed later.
+func (w *Worker) fetch(ctx context.Context) (*delivery, error) {
+	if d, err := w.reclaim(ctx); d != nil || err != nil {
+		return d, err
+	}
 	res, err := w.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    keys.Group,
 		Consumer: w.opts.Consumer,
@@ -189,9 +236,48 @@ func (w *Worker) fetch(ctx context.Context) (*redis.XMessage, error) {
 		return nil, err
 	}
 	for _, s := range res {
-		for i := range s.Messages {
-			return &s.Messages[i], nil
+		for _, m := range s.Messages {
+			return &delivery{stream: s.Stream, msg: m}, nil
 		}
+	}
+	return nil, nil
+}
+
+// reclaim claims one entry that has been idle for longer than the
+// visibility timeout, using XAUTOCLAIM. It walks the PEL with a cursor;
+// once a full pass finds nothing, it waits ReclaimInterval before scanning
+// again. Reclaimed entries go through start.lua like new ones, which rotates
+// the lease token and counts the attempt.
+func (w *Worker) reclaim(ctx context.Context) (*delivery, error) {
+	if time.Now().Before(w.nextReclaim) {
+		return nil, nil
+	}
+	msgs, next, err := w.rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+		Stream:   w.stream,
+		Group:    keys.Group,
+		Consumer: w.opts.Consumer,
+		MinIdle:  w.opts.VisibilityTimeout,
+		Start:    w.reclaimCursor,
+		Count:    1,
+	}).Result()
+	if err != nil {
+		w.nextReclaim = time.Now().Add(jitter(w.opts.ReclaimInterval))
+		return nil, fmt.Errorf("reclaim: %w", err)
+	}
+	w.reclaimCursor = next
+	if len(msgs) > 0 && w.leases.has(msgs[0].ID) {
+		// Our own in-flight job went idle past the timeout (heartbeats were
+		// failing). The heartbeat loop owns that decision; starting it again
+		// here would run it twice in this process.
+		return nil, nil
+	}
+	if len(msgs) > 0 {
+		w.log.Info("reclaimed expired lease", "entry", msgs[0].ID)
+		return &delivery{stream: w.stream, msg: msgs[0], reclaimed: true}, nil
+	}
+	if next == "0-0" {
+		// Full pass done; nothing more expired right now.
+		w.nextReclaim = time.Now().Add(jitter(w.opts.ReclaimInterval))
 	}
 	return nil, nil
 }

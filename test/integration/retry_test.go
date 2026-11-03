@@ -222,7 +222,7 @@ func TestReplayBatchAndPurge(t *testing.T) {
 		msg := deliver(t, rdb, q, "A")
 		k := []string{keys.Job(q, id), keys.Stream(q, keys.DefaultPriority)}
 		tok := fmt.Sprint("t", i)
-		if st, _ := runStatus(t, scripts.Start, rdb, k, keys.Group, msg.ID, "A", tok, state.SourcesCSV(state.Start)); st != "OK" {
+		if st, _ := startJob(t, rdb, q, id, msg.ID, "A", tok); st != "OK" {
 			t.Fatal(st)
 		}
 		k = append(k, keys.Sched(q), keys.Dead(q))
@@ -371,8 +371,9 @@ func TestFailIsFencedByLeaseToken(t *testing.T) {
 	id, _ := c.Enqueue(ctx, q, taskq.EnqueueOptions{Type: "x"})
 	msg := deliver(t, rdb, q, "A")
 	k := []string{keys.Job(q, id), keys.Stream(q, keys.DefaultPriority)}
-	runStatus(t, scripts.Start, rdb, k, keys.Group, msg.ID, "A", "old", state.SourcesCSV(state.Start))
-	runStatus(t, scripts.Start, rdb, k, keys.Group, msg.ID, "B", "new", state.SourcesCSV(state.Start))
+	startJob(t, rdb, q, id, msg.ID, "A", "old")
+	claimTo(t, rdb, q, msg.ID, "B")
+	startJob(t, rdb, q, id, msg.ID, "B", "new")
 	before := snap(t, rdb, q, id)
 	st, _ := runStatus(t, scripts.Fail, rdb, append(k, keys.Sched(q), keys.Dead(q)),
 		keys.Group, msg.ID, "old", "e", 0, "1", state.SourcesCSV(state.Fail))

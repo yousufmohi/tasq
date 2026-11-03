@@ -23,8 +23,9 @@ const maxErrorLen = 4096
 
 // delivery is a stream entry this worker has read and is about to start.
 type delivery struct {
-	stream string
-	msg    redis.XMessage
+	stream    string
+	msg       redis.XMessage
+	reclaimed bool
 }
 
 func (w *Worker) process(ctx context.Context, d delivery) {
@@ -36,10 +37,11 @@ func (w *Worker) process(ctx context.Context, d delivery) {
 		log.Error("stream entry without job id")
 		return
 	}
-	jkey := keys.Job(w.opts.Queue, id)
+	q := w.opts.Queue
+	jkey := keys.Job(q, id)
 	token := job.NewID()
 
-	res, err := scripts.Start.Run(ctx, w.rdb, []string{jkey, d.stream},
+	res, err := scripts.Start.Run(ctx, w.rdb, []string{jkey, d.stream, keys.Dead(q)},
 		keys.Group, d.msg.ID, w.opts.Consumer, token, state.SourcesCSV(state.Start)).Result()
 	if err != nil {
 		log.Error("start failed", "err", err)
@@ -50,8 +52,13 @@ func (w *Worker) process(ctx context.Context, d delivery) {
 		log.Error("start reply", "err", err)
 		return
 	}
-	if status == "SKIP" {
-		log.Warn("delivery skipped", "reason", rest[0])
+	switch status {
+	case "OK":
+	case "DEAD":
+		log.Error("job dead-lettered: attempts exhausted without a reported result")
+		return
+	default:
+		log.Warn("delivery skipped", "status", status, "reason", rest)
 		return
 	}
 	flat, _ := rest[0].([]any)
@@ -60,11 +67,27 @@ func (w *Worker) process(ctx context.Context, d delivery) {
 		log.Error("decode job", "err", err)
 		return
 	}
-	log = log.With("type", j.Type, "attempt", j.Attempts)
+	log = log.With("type", j.Type, "attempt", j.Attempts, "reclaimed", d.reclaimed)
 
-	herr := w.call(ctx, j)
+	jctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	w.leases.add(&inflight{
+		jkey: jkey, stream: d.stream, entry: d.msg.ID, token: token,
+		cancel: cancel, lastRenewed: time.Now(),
+	})
+	herr := w.call(jctx, j)
+	w.leases.remove(d.msg.ID)
+
 	if herr == nil {
 		w.complete(ctx, log, d, jkey, token)
+		return
+	}
+	if cause := context.Cause(jctx); errors.Is(cause, errLeaseLost) || errors.Is(cause, errLeaseExpired) {
+		// The job may belong to another worker now. Reporting a failure
+		// would be fenced anyway (LEASE_LOST) or, if our lease turns out to
+		// be intact, would burn a retry for a failure we caused ourselves.
+		// Leaving the entry in the PEL lets reclaim decide.
+		log.Warn("handler stopped after lease loss; leaving job for reclaim", "cause", cause, "err", herr)
 		return
 	}
 	w.fail(ctx, log, d, j, jkey, token, herr)
@@ -87,14 +110,10 @@ func (w *Worker) call(ctx context.Context, j *taskq.Job) (err error) {
 			err = fmt.Errorf("handler panic: %v\n%s", r, debug.Stack())
 		}
 	}()
-	err = w.h(ctx, j)
-	if err == nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		// The handler ignored its deadline and returned nil late. Its work
-		// is done, so completing is correct; the timeout only bounds how long
-		// we wait for a cooperative handler.
-		return nil
-	}
-	return err
+	// A handler that ignores its deadline and returns nil late has still
+	// done its work, so nil is passed through and the job completes; the
+	// timeout only bounds how long we wait for a cooperative handler.
+	return w.h(ctx, j)
 }
 
 func (w *Worker) complete(ctx context.Context, log *slog.Logger, d delivery, jkey, token string) {
