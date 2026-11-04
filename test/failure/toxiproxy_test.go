@@ -13,6 +13,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/toxiproxy"
 	tcnetwork "github.com/testcontainers/testcontainers-go/network"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/yousufmohi/tasq"
 	"github.com/yousufmohi/tasq/internal/demo"
@@ -22,6 +23,31 @@ import (
 )
 
 const toxiproxyImage = "ghcr.io/shopify/toxiproxy:2.12.0"
+
+// runToxiproxy starts a Toxiproxy container. Docker Desktop occasionally
+// never brings up the host port-forward for a new container (the fault
+// testutil.StartRedisWith also works around): the container runs normally
+// but its API is unreachable from the host. In 30 repetitions of
+// TestFailoverDemo this happened once, and the subtest failed after the
+// module's default 60 s readiness wait. So the wait is 15 s and an
+// unreachable container is replaced, up to three attempts.
+func runToxiproxy(t *testing.T, ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*toxiproxy.Container, error) {
+	t.Helper()
+	opts = append(opts, testcontainers.WithWaitStrategy(
+		wait.ForHTTP("/version").WithPort(toxiproxy.ControlPort).WithStartupTimeout(15*time.Second)))
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		var tp *toxiproxy.Container
+		if tp, err = toxiproxy.Run(ctx, toxiproxyImage, opts...); err == nil {
+			return tp, nil
+		}
+		t.Logf("toxiproxy attempt %d not reachable from the host, replacing it: %v", attempt, err)
+		if tp != nil {
+			_ = testcontainers.TerminateContainer(tp)
+		}
+	}
+	return nil, err
+}
 
 // netEnv is a queue Redis reachable directly (Addr) and through a Toxiproxy
 // proxy (ProxyAddr) whose faults are controlled via Proxy.
@@ -44,7 +70,7 @@ func newNetEnv(t *testing.T) *netEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Terminate() })
-	tp, err := toxiproxy.Run(ctx, toxiproxyImage,
+	tp, err := runToxiproxy(t, ctx,
 		tcnetwork.WithNetwork([]string{"toxiproxy"}, nw),
 		toxiproxy.WithProxy("redis", "redis:6379"))
 	if err != nil {
@@ -93,13 +119,21 @@ func finish(t *testing.T, env *netEnv, q string, acked []string, extra map[strin
 		t.Fatal(err)
 	}
 	rep.Extra = extra
+	rep.ZeroLossAsserted = true
+	return rep
+}
+
+// publishAndCheck records rep, then fails the test if any acked job was
+// lost or did not succeed (publishing first keeps the evidence of a failure).
+func publishAndCheck(t *testing.T, rep verify.Report, acked []string) {
+	t.Helper()
+	verify.Publish(t, rep)
 	if rep.Lost != 0 || rep.SucceededWithoutExecution != 0 {
 		t.Fatalf("lost=%d succeeded_without_execution=%d", rep.Lost, rep.SucceededWithoutExecution)
 	}
 	if rep.Succeeded != len(acked) {
 		t.Fatalf("succeeded %d of %d", rep.Succeeded, len(acked))
 	}
-	return rep
 }
 
 // TestToxiproxyLatency: every worker reaches Redis through 50ms ± 10ms of
@@ -122,7 +156,7 @@ func TestToxiproxyLatency(t *testing.T) {
 	took := time.Since(t0)
 	rep.Extra = map[string]any{"latency_ms_each_way": "50±10", "workers": 2, "concurrency": 8,
 		"seconds_to_drain_300_jobs": took.Seconds()}
-	verify.Publish(t, rep)
+	publishAndCheck(t, rep, acked)
 }
 
 // TestToxiproxyPartitionOneWorker: worker A reaches Redis through the
@@ -158,7 +192,7 @@ func TestToxiproxyPartitionOneWorker(t *testing.T) {
 		"visibility_timeout": vt.String(), "partition": "4s silent (timeout toxic) on worker A only",
 		"a_in_flight_at_cut": inFlightAtCut, "seconds_from_cut_to_all_done": time.Since(cut).Seconds(),
 	}
-	verify.Publish(t, rep)
+	publishAndCheck(t, rep, acked)
 	if rep.Reclaimed == 0 {
 		t.Fatal("no job was reclaimed: the partition did not exercise recovery")
 	}
@@ -190,5 +224,5 @@ func TestToxiproxyConnectionResets(t *testing.T) {
 		flaps++
 	}
 	rep := finish(t, env, q, acked, map[string]any{"flaps": fmt.Sprintf("%d x (150ms down, 150ms up)", flaps)})
-	verify.Publish(t, rep)
+	publishAndCheck(t, rep, acked)
 }

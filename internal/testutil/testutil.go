@@ -45,7 +45,18 @@ type RedisOptions struct {
 	// under these DNS names (for Toxiproxy or replication).
 	Network *testcontainers.DockerNetwork
 	Aliases []string
+	// LazyFSDir runs Redis from the image built from this directory
+	// (test/failure/lazyfs) instead of RedisImage. Redis's data directory is
+	// then a LazyFS mount, so HostCrash can drop writes that were never
+	// fsynced. The container gets /dev/fuse and CAP_SYS_ADMIN for FUSE.
+	LazyFSDir string
 }
+
+// LazyFS image coordinates: built once, then reused from the Docker cache.
+const (
+	lazyFSRepo = "taskq-lazyfs-redis"
+	lazyFSTag  = "lazyfs-0.3.1-redis-7.4.12"
+)
 
 // StartRedis starts a container. extraArgs are appended to the
 // redis-server command line and override the defaults.
@@ -80,27 +91,47 @@ func startRedisOnce(ctx context.Context, o RedisOptions) (*Redis, error) {
 		"--maxmemory-policy", "noeviction",
 		"--save", "",
 	}, o.Args...)
+	image := RedisImage
+	if o.LazyFSDir != "" {
+		image = ""
+		cmd = cmd[1:] // the image's entrypoint starts redis-server itself
+	}
 	opts := []testcontainers.ContainerCustomizer{
 		testcontainers.WithExposedPorts("6379/tcp"),
 		testcontainers.WithCmd(cmd...),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("Ready to accept connections").WithStartupTimeout(60 * time.Second)),
 	}
+	if o.LazyFSDir != "" {
+		opts = append(opts, testcontainers.WithDockerfile(testcontainers.FromDockerfile{
+			Context: o.LazyFSDir, Repo: lazyFSRepo, Tag: lazyFSTag, KeepImage: true,
+		}))
+	}
+	var hostPort int
 	if o.FixedPort {
-		port, err := freePort()
-		if err != nil {
+		var err error
+		if hostPort, err = freePort(); err != nil {
 			return nil, err
 		}
+	}
+	if o.FixedPort || o.LazyFSDir != "" {
 		opts = append(opts, testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
-			hc.PortBindings = network.PortMap{
-				network.MustParsePort("6379/tcp"): {{HostPort: strconv.Itoa(port)}},
+			if o.FixedPort {
+				hc.PortBindings = network.PortMap{
+					network.MustParsePort("6379/tcp"): {{HostPort: strconv.Itoa(hostPort)}},
+				}
+			}
+			if o.LazyFSDir != "" {
+				hc.Devices = append(hc.Devices, container.DeviceMapping{
+					PathOnHost: "/dev/fuse", PathInContainer: "/dev/fuse", CgroupPermissions: "rwm"})
+				hc.CapAdd = append(hc.CapAdd, "SYS_ADMIN")
 			}
 		}))
 	}
 	if o.Network != nil {
 		opts = append(opts, tcnetwork.WithNetwork(o.Aliases, o.Network))
 	}
-	c, err := testcontainers.Run(ctx, RedisImage, opts...)
+	c, err := testcontainers.Run(ctx, image, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("start redis container: %w", err)
 	}
@@ -175,6 +206,17 @@ func (r *Redis) Stop(ctx context.Context) error {
 func (r *Redis) Start(ctx context.Context) error {
 	if err := r.c.Start(ctx); err != nil {
 		return err
+	}
+	return waitPing(ctx, r.Addr)
+}
+
+// HostCrash simulates a power loss or kernel crash for a Redis started with
+// LazyFSDir: redis-server is SIGKILLed, every write LazyFS holds that was never
+// fsynced is dropped, and Redis restarts on what fsync made durable (see
+// test/failure/lazyfs/crash.sh). It returns once Redis answers PING again.
+func (r *Redis) HostCrash(ctx context.Context) error {
+	if err := r.Exec(ctx, "/usr/local/bin/crash.sh"); err != nil {
+		return fmt.Errorf("crash.sh: %w", err)
 	}
 	return waitPing(ctx, r.Addr)
 }

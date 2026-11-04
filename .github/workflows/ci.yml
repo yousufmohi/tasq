@@ -32,12 +32,14 @@ jobs:
   failure:
     if: github.event_name == 'workflow_dispatch' && inputs.failure_suite
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
-      - run: make failure RESULTS=$PWD/ci-results
+      # One run: the committed results come from bench/failure.sh 5 on the
+      # documented machine; CI only checks that the suite still passes.
+      - run: make failure REPS=1
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: failure-reports, path: ci-results/failure }
+        with: { name: failure-reports, path: results/failure }

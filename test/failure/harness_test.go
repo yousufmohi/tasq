@@ -23,8 +23,9 @@ import (
 type producer struct {
 	mu        sync.Mutex
 	acked     []string
-	uncertain []string // ErrDurabilityUncertain: on the primary, unconfirmed
-	failed    int      // errors (e.g. Redis down): not acked, nothing promised
+	ackedAt   map[string]time.Time // when Enqueue returned success
+	uncertain []string             // ErrDurabilityUncertain: on the primary, unconfirmed
+	failed    int                  // errors (e.g. Redis down): not acked, nothing promised
 	stop      chan struct{}
 	wg        sync.WaitGroup
 	started   time.Time
@@ -33,7 +34,7 @@ type producer struct {
 
 func startProducer(t *testing.T, c *taskq.Client, q string, goroutines int, every time.Duration, o taskq.EnqueueOptions) *producer {
 	t.Helper()
-	p := &producer{stop: make(chan struct{}), started: time.Now()}
+	p := &producer{stop: make(chan struct{}), started: time.Now(), ackedAt: map[string]time.Time{}}
 	for range goroutines {
 		p.wg.Add(1)
 		go func() {
@@ -51,6 +52,7 @@ func startProducer(t *testing.T, c *taskq.Client, q string, goroutines int, ever
 				switch {
 				case err == nil:
 					p.acked = append(p.acked, id)
+					p.ackedAt[id] = time.Now()
 				case errors.Is(err, taskq.ErrDurabilityUncertain):
 					p.uncertain = append(p.uncertain, id)
 				default:
@@ -70,6 +72,14 @@ func (p *producer) Stop() {
 	close(p.stop)
 	p.wg.Wait()
 	p.stopped = time.Now()
+}
+
+// AckedAt returns when id's Enqueue returned success.
+func (p *producer) AckedAt(id string) (time.Time, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	t, ok := p.ackedAt[id]
+	return t, ok
 }
 
 func (p *producer) Acked() []string {

@@ -5,13 +5,13 @@
 #   raw/<run>.csv.gz  per-job Redis timestamps for every run
 #   summary.md      tables generated from the JSON files
 #
-# Usage: bench/run.sh [reps]        (default 3 repetitions per config)
+# Usage: bench/run.sh [reps]        (default 5 repetitions per config)
 # Needs Docker and Go. Uses a dedicated Redis container on port 6390 and
 # FLUSHALLs it between runs; it never touches any other Redis.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REPS=${1:-3}
+REPS=${1:-5}
 PORT=6390
 ADDR=localhost:$PORT
 CONTAINER=taskq-bench-redis

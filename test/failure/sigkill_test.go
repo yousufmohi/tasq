@@ -72,6 +72,7 @@ func TestSIGKILLWorkersMidJob(t *testing.T) {
 		"worker_processes": 4, "concurrency": 8, "visibility_timeout": "1500ms",
 		"sigkills": f.kills, "processes_started": f.started,
 	}
+	r.ZeroLossAsserted = true
 	verify.Publish(t, r)
 
 	if r.Lost != 0 {

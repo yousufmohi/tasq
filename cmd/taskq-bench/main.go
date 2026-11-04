@@ -12,6 +12,8 @@
 //	recovery  like latency, but SIGKILL -kill workers after -warmup and
 //	          measure how long their orphaned jobs take to finish.
 //	summarize print a Markdown table of every summary JSON under -out.
+//	summarize-failure  print tables for a bench/failure.sh results directory.
+//	summarize-tests    print per-test results for a bench/integration.sh directory.
 //	rtt       print the PING round-trip time to -redis as JSON.
 //
 // Every timestamp used in a result comes from Redis (job created/started/
@@ -89,8 +91,13 @@ type Result struct {
 	EnqueueErrors    int       `json:"enqueue_errors"`
 	DuplicateStarts  int       `json:"jobs_started_more_than_once"`
 	Recovery         *Recovery `json:"recovery,omitempty"`
-	RawFile          string    `json:"raw_file"`
-	RecordedAt       string    `json:"recorded_at"`
+	// CPU during the measured phase: draining (drain mode) or producing
+	// until every job finished (latency/recovery). CPUEnqueue covers the
+	// drain-mode backlog fill, where the client is the busy party.
+	CPU        *CPU   `json:"cpu,omitempty"`
+	CPUEnqueue *CPU   `json:"cpu_enqueue,omitempty"`
+	RawFile    string `json:"raw_file"`
+	RecordedAt string `json:"recorded_at"`
 }
 
 // Recovery describes a recovery-mode run.
@@ -121,7 +128,7 @@ func main() {
 		warmup    time.Duration
 		vis       time.Duration
 	)
-	flag.StringVar(&c.Mode, "mode", "drain", "drain | latency | recovery | summarize | rtt")
+	flag.StringVar(&c.Mode, "mode", "drain", "drain | latency | recovery | summarize | summarize-failure | summarize-tests | rtt")
 	flag.StringVar(&c.Name, "name", "", "result name (default derived from flags)")
 	flag.IntVar(&c.Workers, "workers", 1, "worker processes")
 	flag.IntVar(&c.Concurrency, "concurrency", 16, "jobs in flight per worker")
@@ -136,8 +143,12 @@ func main() {
 	flag.Parse()
 	c.DurationS, c.WarmupS, c.Visibility = duration.Seconds(), warmup.Seconds(), vis.String()
 
-	if c.Mode == "summarize" {
-		if err := summarize(*out); err != nil {
+	switch c.Mode {
+	case "summarize", "summarize-failure", "summarize-tests":
+		f := map[string]func(string) error{
+			"summarize": summarize, "summarize-failure": summarizeFailure, "summarize-tests": summarizeTests,
+		}[c.Mode]
+		if err := f(*out); err != nil {
 			fail(err)
 		}
 		return
@@ -203,6 +214,7 @@ type bench struct {
 	client  *taskq.Client
 	q       string
 	procs   []*exec.Cmd
+	procsMu sync.Mutex
 	ids     []string
 	idsMu   sync.Mutex
 	samples []sample
@@ -221,7 +233,9 @@ func (b *bench) startWorkers() error {
 		if err := cmd.Start(); err != nil {
 			return err
 		}
+		b.procsMu.Lock()
 		b.procs = append(b.procs, cmd)
+		b.procsMu.Unlock()
 	}
 	// Ready when every worker has registered a consumer on the group.
 	deadline := time.Now().Add(15 * time.Second)
@@ -234,6 +248,19 @@ func (b *bench) startWorkers() error {
 	}
 	return errors.New("workers did not register within 15s")
 }
+
+// pids returns the worker processes' PIDs (for the CPU sampler).
+func (b *bench) pids() []int {
+	b.procsMu.Lock()
+	defer b.procsMu.Unlock()
+	out := make([]int, 0, len(b.procs))
+	for _, p := range b.procs {
+		out = append(out, p.Process.Pid)
+	}
+	return out
+}
+
+const cpuInterval = 100 * time.Millisecond
 
 func (b *bench) stopWorkers() {
 	for _, p := range b.procs {
@@ -259,6 +286,7 @@ func (b *bench) drain() (Result, error) {
 	var errs int
 	var mu sync.Mutex
 	per := (b.cfg.Jobs + 63) / 64
+	fill := startSampler(b.rdb, b.pids, cpuInterval)
 	for g := range 64 {
 		wg.Add(1)
 		go func() {
@@ -276,10 +304,19 @@ func (b *bench) drain() (Result, error) {
 		}()
 	}
 	wg.Wait()
+	fillCPU, err := fill.finish()
+	if err != nil {
+		return Result{}, err
+	}
+	drain := startSampler(b.rdb, b.pids, cpuInterval)
 	if err := b.startWorkers(); err != nil {
 		return Result{}, err
 	}
 	if err := b.waitDone(10 * time.Minute); err != nil {
+		return Result{}, err
+	}
+	drainCPU, err := drain.finish()
+	if err != nil {
 		return Result{}, err
 	}
 	if err := b.collect(); err != nil {
@@ -287,6 +324,7 @@ func (b *bench) drain() (Result, error) {
 	}
 	res := b.summarise()
 	res.EnqueueErrors = errs
+	res.CPU, res.CPUEnqueue = drainCPU, fillCPU
 	var first, last int64 = math.MaxInt64, 0
 	for _, s := range b.samples {
 		if s.state == "succeeded" {
@@ -318,6 +356,7 @@ func (b *bench) openLoop(duration, warmup time.Duration, kill int) (Result, erro
 	lags := make([]float64, 0, total)
 	var errs int
 
+	sampler := startSampler(b.rdb, b.pids, cpuInterval)
 	start := time.Now()
 	var wg sync.WaitGroup
 	for range 128 {
@@ -379,11 +418,16 @@ func (b *bench) openLoop(duration, warmup time.Duration, kill int) (Result, erro
 	if err := b.waitDone(10 * time.Minute); err != nil {
 		return Result{}, err
 	}
+	cpu, err := sampler.finish()
+	if err != nil {
+		return Result{}, err
+	}
 	if err := b.collect(); err != nil {
 		return Result{}, err
 	}
 	res := b.summarise()
 	res.EnqueueErrors = errs
+	res.CPU = cpu
 	res.OfferedRate = b.cfg.Rate
 	res.AchievedEnqueue = float64(len(b.ids)) / produceSpan.Seconds()
 	sort.Float64s(lags)
@@ -605,26 +649,52 @@ func summarize(dir string) error {
 		}
 		return fmt.Sprintf("%.1f", g(p))
 	}
+	// CPU columns are medians of the 100 ms interval values, in cores.
+	cpu := func(c *CPU, g func(CPUCores) float64) string {
+		if c == nil {
+			return "-"
+		}
+		return fmt.Sprintf("%.2f", g(c.Median))
+	}
+	fmt.Println("CPU columns: median over 100 ms intervals of the measured phase, in cores (1.00 = one core fully busy).")
+	fmt.Println("`redis main` is the thread that runs every command and script, so it cannot exceed 1.00.")
+	fmt.Println("`host busy` is the whole WSL2 VM, which also runs Docker Desktop's containers.")
+	fmt.Println()
 	fmt.Println("### drain (consume throughput)")
-	fmt.Println("| run | workers | conc | sleep ms | jobs | jobs/s | wait p50 ms | wait p99 ms |")
-	fmt.Println("|---|---|---|---|---|---|---|---|")
+	fmt.Println("| run | workers | conc | sleep ms | jobs | jobs/s | wait p50 ms | wait p99 ms | redis main | redis process | workers | client | host busy |")
+	fmt.Println("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rs {
 		if r.Config.Mode == "drain" {
-			fmt.Printf("| %s | %d | %d | %d | %d | %.0f | %s | %s |\n", r.Config.Name, r.Config.Workers, r.Config.Concurrency,
+			fmt.Printf("| %s | %d | %d | %d | %d | %.0f | %s | %s | %s | %s | %s | %s | %s |\n", r.Config.Name, r.Config.Workers, r.Config.Concurrency,
 				r.Config.SleepMS, r.Succeeded, r.Throughput,
-				f(r.QueueWait, func(p *Pct) float64 { return p.P50 }), f(r.QueueWait, func(p *Pct) float64 { return p.P99 }))
+				f(r.QueueWait, func(p *Pct) float64 { return p.P50 }), f(r.QueueWait, func(p *Pct) float64 { return p.P99 }),
+				cpu(r.CPU, func(c CPUCores) float64 { return c.RedisMainThread }), cpu(r.CPU, func(c CPUCores) float64 { return c.RedisProcess }),
+				cpu(r.CPU, func(c CPUCores) float64 { return c.Workers }), cpu(r.CPU, func(c CPUCores) float64 { return c.Client }),
+				cpu(r.CPU, func(c CPUCores) float64 { return c.HostBusy }))
+		}
+	}
+	fmt.Println("\n### drain backlog fill (the enqueue phase of each drain run: 64 producer goroutines, no workers)")
+	fmt.Println("| run | jobs | enqueue errors | redis main | redis process | client | host busy |")
+	fmt.Println("|---|---|---|---|---|---|---|")
+	for _, r := range rs {
+		if r.Config.Mode == "drain" {
+			fmt.Printf("| %s | %d | %d | %s | %s | %s | %s |\n", r.Config.Name, r.Config.Jobs, r.EnqueueErrors,
+				cpu(r.CPUEnqueue, func(c CPUCores) float64 { return c.RedisMainThread }), cpu(r.CPUEnqueue, func(c CPUCores) float64 { return c.RedisProcess }),
+				cpu(r.CPUEnqueue, func(c CPUCores) float64 { return c.Client }), cpu(r.CPUEnqueue, func(c CPUCores) float64 { return c.HostBusy }))
 		}
 	}
 	fmt.Println("\n### latency (open loop)")
-	fmt.Println("| run | workers | conc | offered/s | achieved/s | e2e p50 ms | e2e p95 ms | e2e p99 ms | e2e max ms | producer p99 lag ms |")
-	fmt.Println("|---|---|---|---|---|---|---|---|---|---|")
+	fmt.Println("| run | workers | conc | offered/s | achieved/s | e2e p50 ms | e2e p95 ms | e2e p99 ms | e2e max ms | producer p99 lag ms | redis main | workers | client |")
+	fmt.Println("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rs {
 		if r.Config.Mode == "latency" {
-			fmt.Printf("| %s | %d | %d | %.0f | %.0f | %s | %s | %s | %s | %.1f |\n", r.Config.Name, r.Config.Workers, r.Config.Concurrency,
+			fmt.Printf("| %s | %d | %d | %.0f | %.0f | %s | %s | %s | %s | %.1f | %s | %s | %s |\n", r.Config.Name, r.Config.Workers, r.Config.Concurrency,
 				r.OfferedRate, r.Throughput,
 				f(r.EndToEnd, func(p *Pct) float64 { return p.P50 }), f(r.EndToEnd, func(p *Pct) float64 { return p.P95 }),
 				f(r.EndToEnd, func(p *Pct) float64 { return p.P99 }), f(r.EndToEnd, func(p *Pct) float64 { return p.Max }),
-				r.ProducerP99LagMS)
+				r.ProducerP99LagMS,
+				cpu(r.CPU, func(c CPUCores) float64 { return c.RedisMainThread }), cpu(r.CPU, func(c CPUCores) float64 { return c.Workers }),
+				cpu(r.CPU, func(c CPUCores) float64 { return c.Client }))
 		}
 	}
 	fmt.Println("\n### recovery (SIGKILL under load)")

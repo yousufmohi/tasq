@@ -62,7 +62,7 @@ func TestFailoverDemo(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = primary.Terminate() })
-			tp, err := toxiproxy.Run(ctx, toxiproxyImage,
+			tp, err := runToxiproxy(t, ctx,
 				tcnetwork.WithNetwork([]string{"toxiproxy"}, nw),
 				toxiproxy.WithProxy("replication", "primary:6379"))
 			if err != nil {
@@ -122,7 +122,7 @@ func TestFailoverDemo(t *testing.T) {
 
 			rep := verify.Report{
 				Test:  "TestFailoverDemo/" + mode.name,
-				Acked: len(acked), Lost: lost,
+				Acked: len(acked), Lost: lost, ZeroLossAsserted: mode.dur.Replicas > 0,
 				Extra: map[string]any{
 					"mode":                             mode.name,
 					"redis_args":                       mode.args,

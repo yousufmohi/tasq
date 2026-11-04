@@ -26,6 +26,10 @@ import (
 // otherwise), and publishing it with Publish.
 type Report struct {
 	Test string `json:"test"`
+	// ZeroLossAsserted is true when the test fails if any acked job is
+	// lost (as opposed to demonstrations and positive controls, which only
+	// report loss).
+	ZeroLossAsserted bool `json:"zero_loss_asserted"`
 	// Acked is the number of jobs whose Enqueue returned success.
 	Acked     int `json:"acked"`
 	Succeeded int `json:"succeeded"`
@@ -50,6 +54,10 @@ type Report struct {
 	// Applied counts distinct idempotency keys an idempotent downstream
 	// accepted; it can never exceed the number of distinct jobs.
 	Applied int `json:"applied"`
+	// AppliedNotAcked counts jobs the downstream applied although their
+	// Enqueue returned an error: Redis applied the write but the reply was
+	// lost (why producer retries need idempotency keys, D4).
+	AppliedNotAcked int `json:"applied_not_acked"`
 	// Reclaimed counts jobs that needed more than one start.
 	Reclaimed int `json:"reclaimed"`
 	// SucceededWithoutExecution must be 0; anything else is a bug in the
@@ -105,6 +113,15 @@ func VerifyWith(ctx context.Context, rdb, rec redis.UniversalClient, q string, a
 		applied[k] = true
 	}
 
+	ackedSet := make(map[string]bool, len(acked))
+	for _, id := range acked {
+		ackedSet[id] = true
+	}
+	for _, k := range appliedSet {
+		if !ackedSet[k] {
+			r.AppliedNotAcked++
+		}
+	}
 	for i, id := range acked {
 		m := cmds[i].Val()
 		if len(m) == 0 {

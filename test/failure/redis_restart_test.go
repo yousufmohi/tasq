@@ -18,6 +18,9 @@ type restartCase struct {
 	args []string // redis-server persistence settings
 	// disrupt takes Redis down and brings it back.
 	disrupt func(context.Context, *testutil.Redis) error
+	// lazy runs Redis on a LazyFS mount (test/failure/lazyfs), which hostCrash
+	// needs to drop unsynced writes.
+	lazy bool
 	// expect: "none" asserts zero loss; "some" asserts loss > 0 (the
 	// positive control proving the harness can detect loss); "report"
 	// only records the measurement.
@@ -31,6 +34,10 @@ func killRestart(ctx context.Context, r *testutil.Redis) error {
 	}
 	return r.Start(ctx)
 }
+
+// hostCrash simulates a power loss: Redis is SIGKILLed and every write
+// that was never fsynced is dropped before it restarts.
+func hostCrash(ctx context.Context, r *testutil.Redis) error { return r.HostCrash(ctx) }
 
 func gracefulRestart(ctx context.Context, r *testutil.Redis) error {
 	if err := r.Stop(ctx); err != nil {
@@ -59,8 +66,23 @@ func TestRedisRestart(t *testing.T) {
 			name: "sigkill_aof_everysec", args: []string{"--appendfsync", "everysec"},
 			disrupt: killRestart, expect: "report",
 			why: "a process kill keeps the kernel page cache, so written-but-unfsynced AOF " +
-				"data usually survives; the ~1s everysec window applies to host/kernel crashes, " +
-				"which this test cannot simulate",
+				"data survives; the everysec loss window applies to host/kernel crashes (hostcrash_aof_everysec)",
+		},
+		{
+			name: "hostcrash_aof_always", args: []string{"--appendfsync", "always"}, lazy: true,
+			disrupt: hostCrash, expect: "none",
+			why: "every write is fsynced before Redis replies, so dropping unsynced data loses nothing acked",
+		},
+		{
+			name: "hostcrash_aof_everysec", args: []string{"--appendfsync", "everysec"}, lazy: true,
+			disrupt: hostCrash, expect: "report",
+			why: "Redis fsyncs the AOF about once per second; writes acked since the last fsync are lost",
+		},
+		{
+			name: "hostcrash_aof_no_control", args: []string{"--appendfsync", "no"}, lazy: true,
+			disrupt: hostCrash, expect: "some",
+			why: "positive control: Redis never fsyncs, so the simulated crash must lose acked jobs; " +
+				"this proves the crash simulation really drops unsynced data",
 		},
 		{
 			name: "sigkill_no_persistence_control", args: []string{"--appendonly", "no"},
@@ -75,7 +97,13 @@ func TestRedisRestart(t *testing.T) {
 
 func runRestart(t *testing.T, tc restartCase) {
 	ctx := context.Background()
-	r, err := testutil.StartRedisWith(ctx, testutil.RedisOptions{Args: tc.args, FixedPort: true})
+	o := testutil.RedisOptions{Args: tc.args, FixedPort: true}
+	if tc.lazy {
+		// The container is never stopped (crash.sh restarts redis-server
+		// inside it), so its ephemeral port stays valid.
+		o = testutil.RedisOptions{Args: tc.args, LazyFSDir: "lazyfs"}
+	}
+	r, err := testutil.StartRedisWith(ctx, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,10 +141,25 @@ func runRestart(t *testing.T, tc restartCase) {
 		t.Fatal(err)
 	}
 	rep.Test = "TestRedisRestart/" + tc.name
+	rep.ZeroLossAsserted = tc.expect == "none"
 	rep.Extra = map[string]any{
 		"redis_args": tc.args, "expectation": tc.expect, "why": tc.why,
 		"acked_before_disruption": ackedBefore, "enqueue_errors": p.failed,
 		"outage_ms": outage.Milliseconds(),
+	}
+	if tc.lazy {
+		rep.Extra["simulation"] = "LazyFS clear-cache: unsynced writes dropped (test/failure/lazyfs)"
+	}
+	if len(rep.LostIDs) > 0 {
+		// How far back from the disruption the loss reaches: the oldest
+		// lost job's ack time, relative to the start of the disruption.
+		oldest := t0
+		for _, id := range rep.LostIDs {
+			if at, ok := p.AckedAt(id); ok && at.Before(oldest) {
+				oldest = at
+			}
+		}
+		rep.Extra["lost_window_ms"] = t0.Sub(oldest).Milliseconds()
 	}
 	verify.Publish(t, rep)
 

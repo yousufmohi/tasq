@@ -22,7 +22,7 @@ docker_mem=$(docker info --format '{{.MemTotal}}')
 redis_version=$(docker exec "$container" redis-cli INFO server | sed -n 's/^redis_version:\(.*\)\r$/\1/p')
 redis_fsync=$(docker exec "$container" redis-cli CONFIG GET appendfsync | tail -1)
 sha=$(git rev-parse HEAD)
-dirty=$( [ -z "$(git status --porcelain -- . ':!bench/results')" ] && echo false || echo true )
+dirty=$( [ -z "$(git status --porcelain -- . ':!bench/results' ':!results')" ] && echo false || echo true )
 rtt=$(bench/bin/taskq-bench -mode rtt -redis "$addr")
 
 cat <<EOF
