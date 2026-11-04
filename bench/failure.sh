@@ -30,7 +30,7 @@ printf 'run\texit\tseconds\tfailed\n' > "$OUT/runs.tsv"
 for i in $(seq 1 "$REPS"); do
   echo ">> failure suite run $i/$REPS"
   t0=$(date +%s)
-  TASKQ_RESULTS_DIR="$OUT/run$i" go test -race -count=1 -tags failure -v -timeout 45m \
+  TASKQ_RESULTS_DIR="$PWD/$OUT/run$i" go test -race -count=1 -tags failure -v -timeout 45m \
     ./test/failure/ > "$OUT/run$i.log" 2>&1
   code=$?
   failed=$(grep -E '^\s*--- FAIL' "$OUT/run$i.log" | awk '{print $3}' | paste -sd, -)
