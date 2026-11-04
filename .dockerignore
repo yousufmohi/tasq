@@ -1,0 +1,6 @@
+.git
+bin
+results
+bench/results
+*.test
+*.out

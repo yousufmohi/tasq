@@ -1,0 +1,126 @@
+{
+  "uid": "taskq",
+  "title": "taskq",
+  "tags": ["taskq"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "queue",
+        "label": "Queue",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": { "query": "label_values(taskq_queue_waiting, queue)", "refId": "q" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "selected": true, "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Waiting",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(taskq_queue_waiting{queue=~\"$queue\"})" }]
+    },
+    {
+      "id": 2, "type": "stat", "title": "In flight (PEL)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(taskq_queue_in_flight{queue=~\"$queue\"})" }]
+    },
+    {
+      "id": 3, "type": "stat", "title": "Scheduled / retrying",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(taskq_queue_scheduled{queue=~\"$queue\"})" }]
+    },
+    {
+      "id": 4, "type": "stat", "title": "Dead letters",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [
+        { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum(taskq_queue_dead{queue=~\"$queue\"})" }]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Throughput by outcome (jobs/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [{ "refId": "A", "legendFormat": "{{outcome}}",
+        "expr": "sum by (outcome) (rate(taskq_jobs_finished_total{queue=~\"$queue\"}[1m]))" }]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Queue depth by priority",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "waiting {{priority}}",
+          "expr": "sum by (priority) (taskq_queue_waiting{queue=~\"$queue\"})" },
+        { "refId": "B", "legendFormat": "in flight {{priority}}",
+          "expr": "sum by (priority) (taskq_queue_in_flight{queue=~\"$queue\"})" }
+      ]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "End-to-end latency (enqueue → success)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "p50", "expr": "histogram_quantile(0.50, sum by (le) (rate(taskq_job_end_to_end_seconds_bucket{queue=~\"$queue\"}[1m])))" },
+        { "refId": "B", "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(taskq_job_end_to_end_seconds_bucket{queue=~\"$queue\"}[1m])))" },
+        { "refId": "C", "legendFormat": "p99", "expr": "histogram_quantile(0.99, sum by (le) (rate(taskq_job_end_to_end_seconds_bucket{queue=~\"$queue\"}[1m])))" }
+      ]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Queue wait p95 by priority",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "refId": "A", "legendFormat": "{{priority}}",
+        "expr": "histogram_quantile(0.95, sum by (le, priority) (rate(taskq_queue_wait_seconds_bucket{queue=~\"$queue\"}[1m])))" }]
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Recovery: reclaims and lease losses (per s)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "reclaimed", "expr": "sum(rate(taskq_jobs_reclaimed_total{queue=~\"$queue\"}[1m]))" },
+        { "refId": "B", "legendFormat": "lease lost {{reason}}", "expr": "sum by (reason) (rate(taskq_lease_lost_total{queue=~\"$queue\"}[1m]))" },
+        { "refId": "C", "legendFormat": "released", "expr": "sum(rate(taskq_jobs_finished_total{queue=~\"$queue\",outcome=\"released\"}[1m]))" }
+      ]
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Redis script latency p99",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "refId": "A", "legendFormat": "{{script}}",
+        "expr": "histogram_quantile(0.99, sum by (le, script) (rate(taskq_redis_script_duration_seconds_bucket[1m])))" }]
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "API requests by status",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{ "refId": "A", "legendFormat": "{{code}}",
+        "expr": "sum by (code) (rate(taskq_api_requests_total[1m]))" }]
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "Workers: in-flight handlers and rate-limit waits",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "in flight {{instance}}", "expr": "sum by (instance) (taskq_jobs_in_flight{queue=~\"$queue\"})" },
+        { "refId": "B", "legendFormat": "rate-limit waits/s", "expr": "sum(rate(taskq_rate_limited_total{queue=~\"$queue\"}[1m]))" }
+      ]
+    }
+  ]
+}

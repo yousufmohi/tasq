@@ -25,7 +25,7 @@ build:
 	$(GO) build -o bin/ ./cmd/...
 
 up:
-	docker compose -f deploy/docker-compose.yml up -d
+	docker compose -f deploy/docker-compose.yml up -d --build --wait
 
 down:
-	docker compose -f deploy/docker-compose.yml down
+	docker compose -f deploy/docker-compose.yml --profile tracing down -v

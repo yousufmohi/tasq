@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # The API exports request metrics and the per-queue depth gauges.
+  - job_name: taskq-api
+    static_configs:
+      - targets: ["api:8080"]
+
+  # Every worker replica: Docker's DNS returns one A record per container.
+  - job_name: taskq-worker
+    dns_sd_configs:
+      - names: ["worker"]
+        type: A
+        port: 9090
+        refresh_interval: 10s

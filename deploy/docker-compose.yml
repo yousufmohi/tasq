@@ -1,5 +1,22 @@
 name: taskq
 
+# docker compose -f deploy/docker-compose.yml up -d --build
+#   API        http://localhost:8080
+#   Prometheus http://localhost:9090
+#   Grafana    http://localhost:3000   (dashboard "taskq", anonymous viewer)
+#
+# Tracing (optional):
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 \
+#     docker compose -f deploy/docker-compose.yml --profile tracing up -d --build
+#   Jaeger UI  http://localhost:16686
+
+x-build: &build
+  context: ..
+  dockerfile: Dockerfile
+
+x-otel: &otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+
 services:
   redis:
     image: redis:7.4.12-alpine
@@ -13,6 +30,69 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+
+  api:
+    build: *build
+    image: taskq:local
+    entrypoint: ["/usr/local/bin/taskq-api"]
+    environment:
+      <<: *otel
+      REDIS_ADDR: redis:6379
+      ADDR: ":8080"
+      TASKQ_API_TOKEN: ${TASKQ_API_TOKEN:-}
+    ports: ["8080:8080"]
+    depends_on:
+      redis: { condition: service_healthy }
+    stop_grace_period: 15s
+
+  worker:
+    build: *build
+    image: taskq:local
+    entrypoint: ["/usr/local/bin/taskq-worker"]
+    environment:
+      <<: *otel
+      REDIS_ADDR: redis:6379
+      QUEUE: default
+      CONCURRENCY: "16"
+      VISIBILITY_TIMEOUT: 30s
+      METRICS_ADDR: ":9090"
+    deploy:
+      replicas: 2
+    depends_on:
+      redis: { condition: service_healthy }
+    # Must exceed the worker's 25s drain timeout, or Docker SIGKILLs
+    # in-flight jobs on `down` (they are then reclaimed, not lost).
+    stop_grace_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+    depends_on: [api, worker]
+
+  grafana:
+    image: grafana/grafana:13.2.5
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/taskq.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+
+  jaeger:
+    profiles: [tracing]
+    image: jaegertracing/jaeger:2.21.0
+    ports:
+      - "16686:16686" # UI
+      - "4318:4318"   # OTLP/HTTP
 
 volumes:
   redis-data:
