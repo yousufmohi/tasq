@@ -1,0 +1,31 @@
+{
+  "config": {
+    "name": "drain_w1_c16_s5_rep2",
+    "mode": "drain",
+    "workers": 1,
+    "concurrency": 16,
+    "jobs": 20000,
+    "rate": 1000,
+    "duration_s": 20,
+    "handler_sleep_ms": 5,
+    "visibility_timeout": "5s",
+    "kill": 1,
+    "warmup_s": 5,
+    "rep": 2
+  },
+  "succeeded": 20000,
+  "not_done": 0,
+  "throughput_jobs_per_s": 2405.5809477988932,
+  "queue_wait": {
+    "n": 20000,
+    "p50_ms": 4444,
+    "p95_ms": 7929,
+    "p99_ms": 8241,
+    "max_ms": 8316,
+    "mean_ms": 4457.08815
+  },
+  "enqueue_errors": 0,
+  "jobs_started_more_than_once": 0,
+  "raw_file": "raw/drain_w1_c16_s5_rep2.csv.gz",
+  "recorded_at": "2026-11-04T00:57:03Z"
+}

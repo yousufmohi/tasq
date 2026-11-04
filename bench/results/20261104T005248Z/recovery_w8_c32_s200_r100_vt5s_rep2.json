@@ -1,0 +1,56 @@
+{
+  "config": {
+    "name": "recovery_w8_c32_s200_r100_vt5s_rep2",
+    "mode": "recovery",
+    "workers": 8,
+    "concurrency": 32,
+    "jobs": 20000,
+    "rate": 100,
+    "duration_s": 25,
+    "handler_sleep_ms": 200,
+    "visibility_timeout": "5s",
+    "kill": 1,
+    "warmup_s": 8,
+    "rep": 2
+  },
+  "succeeded": 2500,
+  "not_done": 0,
+  "throughput_jobs_per_s": 99.24573243350535,
+  "end_to_end": {
+    "n": 2500,
+    "p50_ms": 201,
+    "p95_ms": 202,
+    "p99_ms": 202,
+    "max_ms": 5401,
+    "mean_ms": 207.4572
+  },
+  "queue_wait": {
+    "n": 2500,
+    "p50_ms": 0,
+    "p95_ms": 1,
+    "p99_ms": 1,
+    "max_ms": 5201,
+    "mean_ms": 6.5456
+  },
+  "offered_rate": 100,
+  "achieved_enqueue_rate": 100.0351313377745,
+  "producer_max_schedule_lag_ms": 1.1,
+  "producer_p99_schedule_lag_ms": 1.089,
+  "enqueue_errors": 0,
+  "jobs_started_more_than_once": 3,
+  "recovery": {
+    "workers_killed": 1,
+    "orphaned_jobs": 3,
+    "recovery_time_ms": 5230,
+    "orphan_end_to_end": {
+      "n": 3,
+      "p50_ms": 5322,
+      "p95_ms": 5401,
+      "p99_ms": 5401,
+      "max_ms": 5401,
+      "mean_ms": 5322
+    }
+  },
+  "raw_file": "raw/recovery_w8_c32_s200_r100_vt5s_rep2.csv.gz",
+  "recorded_at": "2026-11-04T01:00:43Z"
+}

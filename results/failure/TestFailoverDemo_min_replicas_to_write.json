@@ -1,9 +1,9 @@
 {
   "test": "TestFailoverDemo/min_replicas_to_write",
-  "acked": 17557,
+  "acked": 17675,
   "succeeded": 0,
   "dead": 0,
-  "lost": 6,
+  "lost": 3,
   "forgotten_after_success": 0,
   "executions": 0,
   "duplicate_executions": 0,
@@ -15,9 +15,9 @@
   "reclaimed": 0,
   "succeeded_without_execution": 0,
   "extra": {
-    "acked_before_partition_1s": 17533,
-    "acked_during_partition_3s": 24,
-    "enqueue_errors": 491,
+    "acked_before_partition_1s": 17653,
+    "acked_during_partition_3s": 22,
+    "enqueue_errors": 484,
     "mode": "min_replicas_to_write",
     "note": "demonstration: loss without WAIT is expected Redis behaviour, not a taskq bug",
     "producers": 16,
@@ -30,5 +30,5 @@
     "uncertain_acks": 0,
     "uncertain_missing_on_new_primary": 0
   },
-  "recorded_at": "2026-11-04T00:36:06Z"
+  "recorded_at": "2026-11-04T01:05:32Z"
 }

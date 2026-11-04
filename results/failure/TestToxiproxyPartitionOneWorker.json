@@ -17,8 +17,8 @@
   "extra": {
     "a_in_flight_at_cut": 8,
     "partition": "4s silent (timeout toxic) on worker A only",
-    "seconds_from_cut_to_all_done": 4.008745712,
+    "seconds_from_cut_to_all_done": 4.009725248,
     "visibility_timeout": "1s"
   },
-  "recorded_at": "2026-11-04T00:37:46Z"
+  "recorded_at": "2026-11-04T01:07:11Z"
 }

@@ -17,8 +17,8 @@
   "extra": {
     "concurrency": 8,
     "latency_ms_each_way": "50±10",
-    "seconds_to_drain_300_jobs": 9.449396332,
+    "seconds_to_drain_300_jobs": 9.550575707,
     "workers": 2
   },
-  "recorded_at": "2026-11-04T00:37:38Z"
+  "recorded_at": "2026-11-04T01:07:02Z"
 }
