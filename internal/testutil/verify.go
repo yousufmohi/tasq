@@ -36,6 +36,9 @@ type Report struct {
 	// Effects counts completed naive (non-idempotent) side effects.
 	Effects          int `json:"effects"`
 	DuplicateEffects int `json:"duplicate_effects"`
+	// OnceEffects counts the same effect guarded by idem.Once.
+	OnceEffects          int `json:"once_effects"`
+	DuplicateOnceEffects int `json:"duplicate_once_effects"`
 	// Applied counts distinct idempotency keys an idempotent downstream
 	// accepted; it can never exceed the number of distinct jobs.
 	Applied int `json:"applied"`
@@ -69,6 +72,14 @@ func Verify(ctx context.Context, rdb redis.UniversalClient, q string, acked []st
 	if err != nil {
 		return r, err
 	}
+	onceEffect, err := rdb.HGetAll(ctx, demo.OnceEffectKey(q)).Result()
+	if err != nil {
+		return r, err
+	}
+	for _, v := range onceEffect {
+		r.OnceEffects += atoi(v)
+	}
+	r.DuplicateOnceEffects = r.OnceEffects - len(onceEffect)
 	applied, err := rdb.SCard(ctx, demo.AppliedKey(q)).Result()
 	if err != nil {
 		return r, err

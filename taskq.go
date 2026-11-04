@@ -84,7 +84,23 @@ type EnqueueOptions struct {
 	// its run time plus up to one promotion interval plus queue wait.
 	Delay time.Duration
 	RunAt time.Time
+
+	// IdempotencyKey deduplicates enqueues: while the key is remembered
+	// (IdempotencyTTL, default 24h), enqueueing again with the same key on
+	// the same queue creates nothing and returns the original job's ID with
+	// ErrDuplicate. Use it to make producer retries safe after a timeout.
+	// The key is also what Job.IdempotencyKey() returns to handlers.
+	IdempotencyKey string
+	IdempotencyTTL time.Duration
 }
+
+// MaxIdempotencyKeyLen bounds IdempotencyKey.
+const MaxIdempotencyKeyLen = 256
+
+// ErrDuplicate is returned by Enqueue, together with the existing job's ID,
+// when the IdempotencyKey was already used. It signals success-by-dedup,
+// not a failure.
+var ErrDuplicate = errors.New("taskq: duplicate idempotency key")
 
 // Enqueue creates a job on queue and returns its ID. A nil error means Redis
 // applied the write on the primary; see docs/DESIGN.md §8 for what that does
@@ -122,14 +138,24 @@ func (c *Client) Enqueue(ctx context.Context, queue string, o EnqueueOptions) (s
 	if !keys.ValidPriority(prio) {
 		return "", fmt.Errorf("taskq: invalid priority %q", prio)
 	}
+	if len(o.IdempotencyKey) > MaxIdempotencyKeyLen {
+		return "", fmt.Errorf("taskq: IdempotencyKey longer than %d bytes", MaxIdempotencyKeyLen)
+	}
+	if o.IdempotencyTTL < 0 {
+		return "", fmt.Errorf("taskq: IdempotencyTTL must be >= 0, got %v", o.IdempotencyTTL)
+	}
+	idemTTL := o.IdempotencyTTL
+	if idemTTL == 0 {
+		idemTTL = 24 * time.Hour
+	}
 	c.register(ctx, queue)
 	id := job.NewID()
 	streams := keys.Streams(queue)
 	res, err := scripts.Enqueue.Run(ctx, c.rdb,
 		[]string{keys.Job(queue, id), keys.Sched(queue), keys.Config(queue),
-			streams[0], streams[1], streams[2]},
+			streams[0], streams[1], streams[2], keys.Idem(queue, o.IdempotencyKey)},
 		id, queue, o.Type, o.Payload, o.MaxAttempts, prio, o.Timeout.Milliseconds(),
-		delay.Milliseconds(),
+		delay.Milliseconds(), o.IdempotencyKey, idemTTL.Milliseconds(),
 	).Result()
 	if err != nil {
 		return "", fmt.Errorf("taskq: enqueue: %w", err)
@@ -141,6 +167,9 @@ func (c *Client) Enqueue(ctx context.Context, queue string, o EnqueueOptions) (s
 	switch status {
 	case "OK":
 		return id, nil
+	case "DUP":
+		existing, _ := rest[0].(string)
+		return existing, ErrDuplicate
 	case "FULL":
 		return "", fmt.Errorf("%w (depth %v)", ErrQueueFull, rest[0])
 	default:

@@ -62,7 +62,7 @@ func run() error {
 	if *recordAddr != "" {
 		rr := redis.NewClient(&redis.Options{Addr: *recordAddr})
 		defer rr.Close()
-		rec = demo.NewRecorder(rr, *queue)
+		rec = demo.NewRecorder(rr, *queue, *visibility)
 	}
 
 	w, err := worker.New(rdb, worker.Options{
