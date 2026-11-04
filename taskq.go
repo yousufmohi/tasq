@@ -127,6 +127,83 @@ type EnqueueOptions struct {
 	// The key is also what Job.IdempotencyKey() returns to handlers.
 	IdempotencyKey string
 	IdempotencyTTL time.Duration
+
+	// Durability, if set, makes Enqueue wait until the write is also on
+	// disk and/or on replicas before returning. See Durability.
+	Durability Durability
+}
+
+// Durability asks Redis to confirm a write beyond the primary's memory
+// before Enqueue returns, at the cost of one extra wait per enqueue.
+//
+// It narrows, but does not close, the windows in docs/DESIGN.md §8:
+// WAIT/WAITAOF confirm that copies exist, yet Redis replication is still
+// asynchronous and a failover may promote a replica that did not receive
+// the write. When the wait times out, Enqueue returns the job ID together
+// with ErrDurabilityUncertain: the job exists on the primary but its
+// durability is unconfirmed. Retrying with the same IdempotencyKey is safe.
+type Durability struct {
+	// LocalFsync waits until the primary has fsynced the write to its AOF
+	// (WAITAOF 1 ...), so a crash of the primary's host cannot lose it.
+	// Requires appendonly yes.
+	LocalFsync bool
+	// Replicas waits until this many replicas acknowledge the write
+	// (WAIT n), or have fsynced it when LocalFsync is also set (WAITAOF).
+	Replicas int
+	// Timeout bounds the wait. Default 1s.
+	Timeout time.Duration
+}
+
+// ErrDurabilityUncertain: the job was enqueued on the primary, but the
+// requested Durability was not confirmed within its timeout.
+var ErrDurabilityUncertain = errors.New("taskq: durability not confirmed")
+
+// enqueueDurable runs the enqueue script and the wait in one pipeline: WAIT
+// and WAITAOF only cover writes made earlier on the *same connection*, and
+// a pipeline is guaranteed to use one connection. EVAL (not EVALSHA) is used
+// so that a flushed script cache cannot fail the pipeline.
+func (c *Client) enqueueDurable(ctx context.Context, d Durability, keyz []string, args []any) (res any, waitErr, err error) {
+	if d.Replicas < 0 || d.Timeout < 0 {
+		return nil, nil, invalidf("Durability values must be >= 0")
+	}
+	timeout := d.Timeout
+	if timeout == 0 {
+		timeout = time.Second
+	}
+	pipe := c.rdb.Pipeline()
+	evalCmd := scripts.Enqueue.Eval(ctx, pipe, keyz, args...)
+	var waitCmd *redis.Cmd
+	if d.LocalFsync {
+		waitCmd = pipe.Do(ctx, "WAITAOF", 1, d.Replicas, timeout.Milliseconds())
+	} else {
+		waitCmd = pipe.Do(ctx, "WAIT", d.Replicas, timeout.Milliseconds())
+	}
+	_, _ = pipe.Exec(ctx) // errors are read per command below
+	if res, err = evalCmd.Result(); err != nil {
+		return nil, nil, err
+	}
+	w, err := waitCmd.Result()
+	if err != nil {
+		return res, fmt.Errorf("%w: %v", ErrDurabilityUncertain, err), nil
+	}
+	if d.LocalFsync {
+		// WAITAOF replies [local fsynced, replicas fsynced].
+		arr, _ := w.([]any)
+		if len(arr) != 2 {
+			return res, fmt.Errorf("%w: unexpected WAITAOF reply %v", ErrDurabilityUncertain, w), nil
+		}
+		local, _ := arr[0].(int64)
+		reps, _ := arr[1].(int64)
+		if local < 1 || reps < int64(d.Replicas) {
+			return res, fmt.Errorf("%w: fsynced locally=%d replicas=%d", ErrDurabilityUncertain, local, reps), nil
+		}
+		return res, nil, nil
+	}
+	n, _ := w.(int64)
+	if n < int64(d.Replicas) {
+		return res, fmt.Errorf("%w: %d of %d replicas acknowledged", ErrDurabilityUncertain, n, d.Replicas), nil
+	}
+	return res, nil, nil
 }
 
 // MaxIdempotencyKeyLen bounds IdempotencyKey.
@@ -208,12 +285,19 @@ func (c *Client) enqueue(ctx context.Context, queue string, o EnqueueOptions) (s
 	id := job.NewID()
 	streams := keys.Streams(queue)
 	traceparent, tracestate := obs.Inject(ctx, c.prop)
-	res, err := scripts.Enqueue.Run(ctx, c.rdb,
-		[]string{keys.Job(queue, id), keys.Sched(queue), keys.Config(queue),
-			streams[0], streams[1], streams[2], keys.Idem(queue, o.IdempotencyKey)},
-		id, queue, o.Type, o.Payload, o.MaxAttempts, prio, o.Timeout.Milliseconds(),
-		delay.Milliseconds(), o.IdempotencyKey, idemTTL.Milliseconds(), traceparent, tracestate,
-	).Result()
+	keyz := []string{keys.Job(queue, id), keys.Sched(queue), keys.Config(queue),
+		streams[0], streams[1], streams[2], keys.Idem(queue, o.IdempotencyKey)}
+	args := []any{id, queue, o.Type, o.Payload, o.MaxAttempts, prio, o.Timeout.Milliseconds(),
+		delay.Milliseconds(), o.IdempotencyKey, idemTTL.Milliseconds(), traceparent, tracestate}
+
+	var res any
+	var err error
+	var waitErr error
+	if o.Durability == (Durability{}) {
+		res, err = scripts.Enqueue.Run(ctx, c.rdb, keyz, args...).Result()
+	} else {
+		res, waitErr, err = c.enqueueDurable(ctx, o.Durability, keyz, args)
+	}
 	if err != nil {
 		return "", fmt.Errorf("taskq: enqueue: %w", err)
 	}
@@ -223,6 +307,9 @@ func (c *Client) enqueue(ctx context.Context, queue string, o EnqueueOptions) (s
 	}
 	switch status {
 	case "OK":
+		if waitErr != nil {
+			return id, waitErr
+		}
 		return id, nil
 	case "DUP":
 		existing, _ := rest[0].(string)

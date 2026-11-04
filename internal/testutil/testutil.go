@@ -5,14 +5,20 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"regexp"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
+	tcnetwork "github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/yousufmo27/taskq/internal/job"
@@ -27,22 +33,56 @@ type Redis struct {
 	c    *testcontainers.DockerContainer
 }
 
+// RedisOptions customises StartRedisWith.
+type RedisOptions struct {
+	// Args are appended to the redis-server command line and override the
+	// defaults (AOF everysec, noeviction, no RDB snapshots).
+	Args []string
+	// FixedPort binds a fixed host port so the address survives container
+	// restarts (Docker otherwise reassigns ephemeral ports on restart).
+	FixedPort bool
+	// Network and Aliases attach the container to a user-defined network
+	// under these DNS names (for Toxiproxy or replication).
+	Network *testcontainers.DockerNetwork
+	Aliases []string
+}
+
 // StartRedis starts a container. extraArgs are appended to the
 // redis-server command line and override the defaults.
 func StartRedis(ctx context.Context, extraArgs ...string) (*Redis, error) {
+	return StartRedisWith(ctx, RedisOptions{Args: extraArgs})
+}
+
+// StartRedisWith starts a container with options.
+func StartRedisWith(ctx context.Context, o RedisOptions) (*Redis, error) {
 	cmd := append([]string{
 		"redis-server",
 		"--appendonly", "yes",
 		"--appendfsync", "everysec",
 		"--maxmemory-policy", "noeviction",
 		"--save", "",
-	}, extraArgs...)
-	c, err := testcontainers.Run(ctx, RedisImage,
+	}, o.Args...)
+	opts := []testcontainers.ContainerCustomizer{
 		testcontainers.WithExposedPorts("6379/tcp"),
 		testcontainers.WithCmd(cmd...),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("Ready to accept connections").WithStartupTimeout(60*time.Second)),
-	)
+			wait.ForLog("Ready to accept connections").WithStartupTimeout(60 * time.Second)),
+	}
+	if o.FixedPort {
+		port, err := freePort()
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort("6379/tcp"): {{HostPort: strconv.Itoa(port)}},
+			}
+		}))
+	}
+	if o.Network != nil {
+		opts = append(opts, tcnetwork.WithNetwork(o.Aliases, o.Network))
+	}
+	c, err := testcontainers.Run(ctx, RedisImage, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("start redis container: %w", err)
 	}
@@ -52,6 +92,69 @@ func StartRedis(ctx context.Context, extraArgs ...string) (*Redis, error) {
 		return nil, err
 	}
 	return &Redis{Addr: addr, c: c}, nil
+}
+
+func freePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// Kill sends SIGKILL to redis-server (no shutdown save, no AOF flush beyond
+// what the kernel already has) and leaves the container stopped.
+func (r *Redis) Kill(ctx context.Context) error {
+	out, err := exec.CommandContext(ctx, "docker", "kill", "--signal", "KILL", r.c.GetContainerID()).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker kill: %v: %s", err, out)
+	}
+	// Wait until Docker reports it stopped.
+	for range 100 {
+		st, err := r.c.State(ctx)
+		if err == nil && !st.Running {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("container still running after SIGKILL")
+}
+
+// Stop shuts redis-server down gracefully (SIGTERM: Redis flushes and
+// fsyncs the AOF before exiting).
+func (r *Redis) Stop(ctx context.Context) error {
+	timeout := 10 * time.Second
+	return r.c.Stop(ctx, &timeout)
+}
+
+// Start starts a stopped container (same filesystem, same fixed port) and
+// waits until Redis answers PING with its data loaded.
+func (r *Redis) Start(ctx context.Context) error {
+	if err := r.c.Start(ctx); err != nil {
+		return err
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: r.Addr})
+	defer rdb.Close()
+	for range 200 {
+		if rdb.Ping(ctx).Err() == nil {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("redis did not come back at %s", r.Addr)
+}
+
+// Exec runs a command inside the container.
+func (r *Redis) Exec(ctx context.Context, cmd ...string) error {
+	code, _, err := r.c.Exec(ctx, cmd)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("%v exited %d", cmd, code)
+	}
+	return nil
 }
 
 // Terminate stops and removes the container.

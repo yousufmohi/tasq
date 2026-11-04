@@ -56,34 +56,41 @@ func weightedOrder(w Weights, strict bool, rnd func(n int) int) [3]int {
 	return out
 }
 
-// fetch returns at most one delivery, or (nil, nil) if nothing arrived
-// within the block timeout. Order of sources:
+// fetch returns up to max deliveries, or none if nothing arrived within the
+// block timeout. Order of sources:
 //
-//  1. an entry buffered by an earlier multi-stream read;
+//  1. entries buffered by an earlier multi-stream read;
 //  2. a reclaimed entry whose lease expired, if a reclaim scan is due;
-//  3. a new entry, trying priority streams in weighted order without
-//     blocking;
+//  3. up to max new entries from the first non-empty priority stream, tried
+//     in weighted order without blocking, in one round trip (fetch.lua);
 //  4. a blocking read on all priority streams.
 //
-// A rate-limit token is taken before any of these, so a rate-limited worker
-// never pulls a job into its PEL just to let it sit there.
-func (w *Worker) fetch(ctx context.Context) (*delivery, error) {
-	if err := w.acquireToken(ctx); err != nil {
+// max is the number of free slots, so a worker never claims more than it
+// can start. When the queue is rate limited, max is forced to 1 and a token
+// is taken first, so a rate-limited worker never pulls a job into its PEL
+// just to let it sit there.
+func (w *Worker) fetch(ctx context.Context, max int) ([]delivery, error) {
+	limited, err := w.acquireToken(ctx)
+	if err != nil {
 		return nil, err
 	}
+	if limited {
+		max = 1
+	}
 	if len(w.buffer) > 0 {
-		d := w.buffer[0]
-		w.buffer = w.buffer[1:]
-		return &d, nil
+		n := min(max, len(w.buffer))
+		ds := append([]delivery(nil), w.buffer[:n]...)
+		w.buffer = w.buffer[n:]
+		return ds, nil
 	}
 	if d, err := w.reclaim(ctx); d != nil || err != nil {
-		return d, err
-	}
-	for _, i := range weightedOrder(w.opts.Weights, w.opts.StrictPriority, rand.IntN) {
-		ds, err := w.read(ctx, []string{w.streams[i]}, -1)
-		if err != nil || len(ds) > 0 {
-			return first(ds), err
+		if d == nil {
+			return nil, err
 		}
+		return []delivery{*d}, nil
+	}
+	if ds, err := w.fetchWeighted(ctx, max); len(ds) > 0 || err != nil {
+		return ds, err
 	}
 	ds, err := w.read(ctx, w.streams, w.opts.Block)
 	if err != nil || len(ds) == 0 {
@@ -94,15 +101,49 @@ func (w *Worker) fetch(ctx context.Context) (*delivery, error) {
 	// concurrency; they are already in our PEL. If they wait longer than the
 	// visibility timeout another worker may reclaim them, and start.lua's
 	// ownership check then makes our later start a no-op.
-	w.buffer = append(w.buffer, ds[1:]...)
-	return &ds[0], nil
+	n := min(max, len(ds))
+	w.buffer = append(w.buffer, ds[n:]...)
+	return ds[:n], nil
 }
 
-func first(ds []delivery) *delivery {
-	if len(ds) == 0 {
-		return nil
+// fetchWeighted reads up to max entries from the first non-empty priority
+// stream, trying them in weighted-random order (fetch.lua).
+func (w *Worker) fetchWeighted(ctx context.Context, max int) ([]delivery, error) {
+	order := weightedOrder(w.opts.Weights, w.opts.StrictPriority, rand.IntN)
+	streams := make([]string, len(order))
+	for k, i := range order {
+		streams[k] = w.streams[i]
 	}
-	return &ds[0]
+	done := w.metrics.scriptTimer("fetch")
+	res, err := scripts.Fetch.Run(ctx, w.rdb, streams, keys.Group, w.opts.Consumer, max).Slice()
+	done()
+	if errors.Is(err, redis.Nil) {
+		return nil, nil // every stream empty
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(res) != 2 {
+		return nil, fmt.Errorf("fetch: unexpected reply %v", res)
+	}
+	stream, _ := res[0].(string)
+	entries, _ := res[1].([]any)
+	out := make([]delivery, 0, len(entries))
+	for _, e := range entries {
+		pair, _ := e.([]any)
+		if len(pair) != 2 {
+			return nil, fmt.Errorf("fetch: malformed entry %v", e)
+		}
+		id, _ := pair[0].(string)
+		flat, _ := pair[1].([]any)
+		values := make(map[string]any, len(flat)/2)
+		for i := 0; i+1 < len(flat); i += 2 {
+			k, _ := flat[i].(string)
+			values[k] = flat[i+1]
+		}
+		out = append(out, delivery{stream: stream, msg: redis.XMessage{ID: id, Values: values}})
+	}
+	return out, nil
 }
 
 // read issues XREADGROUP COUNT 1 over streams; block < 0 means do not block.
@@ -183,40 +224,40 @@ func (w *Worker) reclaim(ctx context.Context) (*delivery, error) {
 	return &delivery{stream: s, msg: msgs[0], reclaimed: true}, nil
 }
 
-// acquireToken blocks until the queue's rate limiter grants a start, or
-// returns immediately if no rate is configured. Whether a rate is set is
-// cached for a second so an unlimited queue pays no extra round trip.
-func (w *Worker) acquireToken(ctx context.Context) error {
+// acquireToken blocks until the queue's rate limiter grants a start and
+// reports whether the queue is rate limited at all. Whether a rate is set
+// is cached for a second so an unlimited queue pays no extra round trip.
+func (w *Worker) acquireToken(ctx context.Context) (limited bool, err error) {
 	if time.Since(w.rateCheckedAt) > time.Second {
 		v, err := w.rdb.HGet(ctx, keys.Config(w.opts.Queue), "rate").Result()
 		if err != nil && !errors.Is(err, redis.Nil) {
-			return fmt.Errorf("read rate: %w", err)
+			return false, fmt.Errorf("read rate: %w", err)
 		}
 		r, _ := strconv.ParseFloat(v, 64)
 		w.rateLimited = r > 0
 		w.rateCheckedAt = time.Now()
 	}
 	if !w.rateLimited {
-		return nil
+		return false, nil
 	}
 	q := w.opts.Queue
 	for {
 		res, err := scripts.RateLimit.Run(ctx, w.rdb, []string{keys.Config(q), keys.RateLimit(q)}).Result()
 		if err != nil {
-			return fmt.Errorf("rate limit: %w", err)
+			return true, fmt.Errorf("rate limit: %w", err)
 		}
 		status, rest, err := scripts.Status(res)
 		if err != nil {
-			return err
+			return true, err
 		}
 		if status == "OK" {
-			return nil
+			return true, nil
 		}
 		w.metrics.rateWait(q)
 		ms, _ := scripts.Int(rest[0])
 		sleep(ctx, min(time.Duration(ms)*time.Millisecond, time.Second))
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return true, ctx.Err()
 		}
 	}
 }

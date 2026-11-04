@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,35 +60,61 @@ func (w *Worker) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	backoff := 50 * time.Millisecond
 
+	// release returns n unused slots.
+	release := func(n int) {
+		for range n {
+			<-sem
+		}
+	}
+
 loop:
 	for {
+		// Wait for one free slot, then claim every other free slot without
+		// waiting: a fetch takes up to that many jobs in one round trip.
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			break loop
 		}
-		d, err := w.fetch(ctx)
+		slots := 1
+	grab:
+		for slots < w.opts.Concurrency {
+			select {
+			case sem <- struct{}{}:
+				slots++
+			default:
+				break grab
+			}
+		}
+		ds, err := w.fetch(ctx, slots)
 		if err != nil {
-			<-sem
+			release(slots)
 			if ctx.Err() != nil {
 				break loop
 			}
 			w.log.Error("fetch failed", "err", err)
+			if strings.Contains(err.Error(), "NOGROUP") {
+				// Redis lost its data (restart without persistence, or
+				// failover to an empty replica). Recreate the groups or every
+				// read would fail forever.
+				if gerr := w.ensureGroup(ctx); gerr == nil {
+					w.log.Warn("consumer group was missing and has been recreated")
+				}
+			}
 			sleep(ctx, backoff)
 			backoff = min(backoff*2, 2*time.Second)
 			continue
 		}
 		backoff = 50 * time.Millisecond
-		if d == nil {
-			<-sem
-			continue
+		release(slots - len(ds))
+		for _, d := range ds {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				w.process(detached, jobCtx, d)
+			}()
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			w.process(detached, jobCtx, *d)
-		}()
 	}
 
 	w.drain(detached, &wg, cancelJobs)

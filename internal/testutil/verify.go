@@ -27,8 +27,13 @@ type Report struct {
 	Acked     int `json:"acked"`
 	Succeeded int `json:"succeeded"`
 	Dead      int `json:"dead"`
-	// Lost: acked jobs that are missing or not in a terminal state.
+	// Lost: acked jobs that are neither terminal in the queue Redis nor
+	// recorded as applied by the (independent) recorder: they never ran to
+	// completion and never will.
 	Lost int `json:"lost"`
+	// ForgottenAfterSuccess: the job ran and its effect was applied, but the
+	// queue Redis later lost its record (e.g. restart without persistence).
+	ForgottenAfterSuccess int `json:"forgotten_after_success"`
 	// Executions counts handler invocations; DuplicateExecutions is
 	// Executions minus the number of distinct jobs that executed.
 	Executions          int `json:"executions"`
@@ -53,8 +58,15 @@ type Report struct {
 	LostIDs []string `json:"-"`
 }
 
-// Verify computes a Report for the acked job IDs of queue q.
+// Verify computes a Report for the acked job IDs of queue q, reading the
+// queue state and the recorder counters from the same Redis.
 func Verify(ctx context.Context, rdb redis.UniversalClient, q string, acked []string) (Report, error) {
+	return VerifyWith(ctx, rdb, rdb, q, acked)
+}
+
+// VerifyWith is Verify with the recorder in a separate Redis (rec), which
+// survives failures injected into the queue Redis (qrdb).
+func VerifyWith(ctx context.Context, rdb, rec redis.UniversalClient, q string, acked []string) (Report, error) {
 	r := Report{Acked: len(acked)}
 	pipe := rdb.Pipeline()
 	cmds := make([]*redis.MapStringStringCmd, len(acked))
@@ -64,15 +76,15 @@ func Verify(ctx context.Context, rdb redis.UniversalClient, q string, acked []st
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return r, err
 	}
-	exec, err := rdb.HGetAll(ctx, demo.ExecKey(q)).Result()
+	exec, err := rec.HGetAll(ctx, demo.ExecKey(q)).Result()
 	if err != nil {
 		return r, err
 	}
-	effect, err := rdb.HGetAll(ctx, demo.EffectKey(q)).Result()
+	effect, err := rec.HGetAll(ctx, demo.EffectKey(q)).Result()
 	if err != nil {
 		return r, err
 	}
-	onceEffect, err := rdb.HGetAll(ctx, demo.OnceEffectKey(q)).Result()
+	onceEffect, err := rec.HGetAll(ctx, demo.OnceEffectKey(q)).Result()
 	if err != nil {
 		return r, err
 	}
@@ -80,17 +92,26 @@ func Verify(ctx context.Context, rdb redis.UniversalClient, q string, acked []st
 		r.OnceEffects += atoi(v)
 	}
 	r.DuplicateOnceEffects = r.OnceEffects - len(onceEffect)
-	applied, err := rdb.SCard(ctx, demo.AppliedKey(q)).Result()
+	appliedSet, err := rec.SMembers(ctx, demo.AppliedKey(q)).Result()
 	if err != nil {
 		return r, err
 	}
-	r.Applied = int(applied)
+	r.Applied = len(appliedSet)
+	applied := make(map[string]bool, len(appliedSet))
+	for _, k := range appliedSet {
+		applied[k] = true
+	}
 
 	for i, id := range acked {
 		m := cmds[i].Val()
 		if len(m) == 0 {
-			r.Lost++
-			r.LostIDs = append(r.LostIDs, id)
+			// Demo jobs use their ID as the idempotency key.
+			if applied[id] {
+				r.ForgottenAfterSuccess++
+			} else {
+				r.Lost++
+				r.LostIDs = append(r.LostIDs, id)
+			}
 			continue
 		}
 		j, err := job.FromMap(m)
@@ -185,5 +206,36 @@ func WaitTerminal(ctx context.Context, rdb redis.UniversalClient, q string, acke
 			return fmt.Errorf("%d jobs not terminal after %v (e.g. %s)", len(remaining), timeout, remaining[0])
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// WaitSettled waits until every acked job is terminal or its hash is gone
+// (a job whose record Redis lost will never change again), then returns.
+func WaitSettled(ctx context.Context, rdb redis.UniversalClient, q string, acked []string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		pipe := rdb.Pipeline()
+		cmds := make([]*redis.StringCmd, len(acked))
+		for i, id := range acked {
+			cmds[i] = pipe.HGet(ctx, keys.Job(q, id), "state")
+		}
+		_, _ = pipe.Exec(ctx)
+		pending := 0
+		for _, c := range cmds {
+			s, err := c.Result()
+			if err == redis.Nil {
+				continue
+			}
+			if s != string(state.Succeeded) && s != string(state.Dead) {
+				pending++
+			}
+		}
+		if pending == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%d jobs still not settled after %v", pending, timeout)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

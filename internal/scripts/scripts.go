@@ -37,6 +37,8 @@ var (
 	releaseSrc string
 	//go:embed delconsumer.lua
 	delconsumerSrc string
+	//go:embed fetch.lua
+	fetchSrc string
 )
 
 var (
@@ -51,6 +53,7 @@ var (
 	RateLimit   = redis.NewScript(prelude + ratelimitSrc)
 	Release     = redis.NewScript(prelude + releaseSrc)
 	DelConsumer = redis.NewScript(prelude + delconsumerSrc)
+	Fetch       = redis.NewScript(prelude + fetchSrc)
 )
 
 // Status extracts the leading status string from a script reply of the form
