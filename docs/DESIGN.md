@@ -1,8 +1,6 @@
 # taskq: Design
 
-Status: **approved 2026-11-03 and implemented.** Where implementation refined
-the design, this document was updated in place, and `docs/MILESTONES.md`
-records why. Numbers here are configuration defaults unless a test or
+Numbers here are configuration defaults unless a test or
 benchmark is cited. Measured results live in `results/failure/` and
 `bench/results/`, and are summarised in `bench/results/*/summary.md` and `docs/FAILURE_MODES.md`.
 
@@ -28,29 +26,19 @@ benchmark is cited. Measured results live in `results/failure/` and
   possible, but only a single primary, optionally with replicas, is tested.
 - Workflows/DAGs, cron schedules, a UI, Kubernetes manifests.
 
-## 2. Environment (inspected 2026-11-03)
+## 2. Test environment
 
 | Item | Value |
 |---|---|
-| Host | Windows 11 Pro, WSL2 kernel 6.18.54.1-microsoft-standard-WSL2 |
-| Distro | Ubuntu 22.04.4 LTS (`Ubuntu`) |
-| CPU | AMD Ryzen 5 7600X, 6 cores / 12 threads (as seen by WSL) |
+| Host | Windows 11 Pro, WSL2 (kernel 6.18.54.1), Ubuntu 22.04.4 LTS |
+| CPU | AMD Ryzen 5 7600X, 6 cores / 12 threads |
 | Memory | 15 GiB visible to WSL |
-| Disk | 1007 GB ext4 VHD, 948 GB free |
-| git / gcc / make | 2.34.1 / 11.4.0 / 4.3 (gcc is needed for `-race`, cgo) |
-| Go | **not installed** |
-| Docker | Docker Desktop 29.7.2 runs on Windows, but **WSL integration is off for `Ubuntu`** (`docker` is a stub in the distro) |
-| redis-cli, jq | not installed (not required; `docker exec` is enough) |
-
-**Prerequisites before milestone 1**
-
-1. Docker Desktop → Settings → Resources → WSL integration → enable `Ubuntu`.
-   Testcontainers, the failure tests, and Compose all need this.
-2. Install the current stable Go toolchain from go.dev into `/usr/local/go`
-   (needs sudo) or `~/.local/go` (no sudo). I'll pin the exact version in `go.mod`.
+| Go | 1.27.3 |
+| Docker | Docker Desktop 29.7.2 with WSL integration |
+| Redis | 7.4.12 (`redis:7.4.12-alpine`) |
 
 **Benchmark caveat:** Redis runs in a Docker Desktop VM, and the clients run in
-WSL2 or in containers on the same host. Results will measure this laptop
+WSL2 or in containers on the same host. Results measure this single-machine
 setup, not production network latency. Every result file records the
 host, versions, and configuration.
 
@@ -569,27 +557,7 @@ standard library. Job IDs are 128-bit random hex, with no UUID dependency.
   with git SHA, Go/Redis/Docker versions, CPU, memory and config. Percentiles
   are computed from raw samples (sorted), not from Prometheus buckets.
 
-## 12. Milestones
-
-Each milestone ends with `go test -race` green and one focused commit, and I stop to review it with you.
-
-1. **Walking skeleton:** module, Redis in Compose, `enqueue.lua`, fetch, `start`,
-   `complete`, integration test (enqueue → process → ack).
-2. **State machine + failure path:** transition table, fencing tokens, `fail.lua`,
-   backoff/jitter, retries via `sched`, DLQ + replay.
-3. **Crash recovery:** heartbeats, `XAUTOCLAIM` reclaim, self-fencing, first SIGKILL test.
-4. **Delayed jobs:** `promote.lua`, concurrency test with many promoters.
-5. **Priorities + rate limit + backpressure.**
-6. **Graceful shutdown:** drain, release, safe consumer deletion.
-7. **Idempotency:** enqueue dedup, `idem.Once`, dual duplicate counters.
-8. **HTTP API.**
-9. **Observability:** slog, Prometheus, OTel.
-10. **Full Compose stack:** API, workers, Prometheus, and Grafana with a provisioned dashboard.
-11. **Failure suite:** Redis restarts, Toxiproxy, failover demo.
-12. **Load tests + results.**
-13. **README, FAILURE_MODES.md, resume bullets** (measured numbers only).
-
-## 13. Decisions (approved 2026-11-03)
+## 12. Decisions
 
 1. **Trace backend:** Jaeger in Compose behind `--profile tracing`. The default
    stack stays Redis, API, workers, Prometheus and Grafana.
@@ -598,4 +566,3 @@ Each milestone ends with `go test -race` green and one focused commit, and I sto
 3. **Default durability:** AOF `appendfsync everysec`, with `WAITAOF`/`WAIT`
    opt-in per enqueue. `always` is exercised in the Redis-restart failure tests
    and in benchmarks for comparison.
-4. **Repository:** local git only, with no remote until the owner sets one up.
