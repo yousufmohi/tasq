@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -66,6 +65,19 @@ type Options struct {
 	Weights        Weights
 	StrictPriority bool
 
+	// DrainTimeout is how long shutdown waits for in-flight handlers to
+	// finish before cancelling them. Keep it below the orchestrator's kill
+	// grace period (Compose stop_grace_period, Kubernetes
+	// terminationGracePeriodSeconds). Default 25s.
+	DrainTimeout time.Duration
+	// ReleaseGrace is how long cancelled handlers get to return before their
+	// jobs are released regardless. Default 2s.
+	ReleaseGrace time.Duration
+	// ConsumerTTL: consumers idle this long with no pending entries are
+	// removed by the consumer GC. Default 1h. ConsumerGCInterval default 5m.
+	ConsumerTTL        time.Duration
+	ConsumerGCInterval time.Duration
+
 	// SkipPolicyCheck disables the startup check that Redis uses
 	// maxmemory-policy noeviction. Only for Redis deployments that block
 	// CONFIG GET and are known to be configured correctly.
@@ -117,6 +129,18 @@ func (o *Options) setDefaults() error {
 	if o.Weights == (Weights{}) {
 		o.Weights = DefaultWeights
 	}
+	if o.DrainTimeout <= 0 {
+		o.DrainTimeout = 25 * time.Second
+	}
+	if o.ReleaseGrace <= 0 {
+		o.ReleaseGrace = 2 * time.Second
+	}
+	if o.ConsumerTTL <= 0 {
+		o.ConsumerTTL = time.Hour
+	}
+	if o.ConsumerGCInterval <= 0 {
+		o.ConsumerGCInterval = 5 * time.Minute
+	}
 	return nil
 }
 
@@ -165,68 +189,6 @@ func (w *Worker) Consumer() string { return w.opts.Consumer }
 
 // InFlight returns the number of jobs currently running.
 func (w *Worker) InFlight() int { return w.leases.len() }
-
-// Run fetches and processes jobs until ctx is cancelled, then waits for
-// in-flight handlers to return.
-func (w *Worker) Run(ctx context.Context) error {
-	if err := w.checkPolicy(ctx); err != nil {
-		return err
-	}
-	if err := w.ensureGroup(ctx); err != nil {
-		return err
-	}
-	w.log.Info("worker started", "concurrency", w.opts.Concurrency,
-		"visibility_timeout", w.opts.VisibilityTimeout)
-
-	// jobCtx outlives ctx so that cancelling Run lets in-flight jobs finish
-	// and be acknowledged instead of being abandoned mid-way. Heartbeats
-	// must keep running while they drain, so they use it too.
-	jobCtx, stopJobs := context.WithCancel(context.WithoutCancel(ctx))
-	defer stopJobs()
-
-	var bg sync.WaitGroup
-	bg.Add(2)
-	go func() { defer bg.Done(); w.promoteLoop(ctx) }()
-	go func() { defer bg.Done(); w.heartbeatLoop(jobCtx) }()
-
-	sem := make(chan struct{}, w.opts.Concurrency)
-	var wg sync.WaitGroup
-	backoff := 50 * time.Millisecond
-
-	for {
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			wg.Wait()
-			stopJobs()
-			bg.Wait()
-			w.log.Info("worker stopped")
-			return nil
-		}
-		d, err := w.fetch(ctx)
-		if err != nil {
-			<-sem
-			if ctx.Err() != nil {
-				continue // loop exits via ctx.Done above
-			}
-			w.log.Error("fetch failed", "err", err)
-			sleep(ctx, backoff)
-			backoff = min(backoff*2, 2*time.Second)
-			continue
-		}
-		backoff = 50 * time.Millisecond
-		if d == nil {
-			<-sem
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			w.process(jobCtx, *d)
-		}()
-	}
-}
 
 // ensureGroup creates the consumer group on every priority stream at ID 0,
 // not "$": jobs enqueued before the first worker ever started must still be

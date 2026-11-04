@@ -49,8 +49,11 @@ func run() error {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
 	slog.SetDefault(log)
 
+	// The first SIGINT/SIGTERM starts a graceful drain. Restoring default
+	// signal handling after it means a second signal kills the process.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go func() { <-ctx.Done(); stop() }()
 
 	rdb := redis.NewClient(&redis.Options{Addr: *redisAddr})
 	defer rdb.Close()

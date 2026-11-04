@@ -33,18 +33,24 @@ var (
 	heartbeatSrc string
 	//go:embed ratelimit.lua
 	ratelimitSrc string
+	//go:embed release.lua
+	releaseSrc string
+	//go:embed delconsumer.lua
+	delconsumerSrc string
 )
 
 var (
-	Enqueue   = redis.NewScript(prelude + enqueueSrc)
-	Start     = redis.NewScript(prelude + startSrc)
-	Complete  = redis.NewScript(prelude + completeSrc)
-	Fail      = redis.NewScript(prelude + failSrc)
-	Promote   = redis.NewScript(prelude + promoteSrc)
-	Replay    = redis.NewScript(prelude + replaySrc)
-	Purge     = redis.NewScript(prelude + purgeSrc)
-	Heartbeat = redis.NewScript(prelude + heartbeatSrc)
-	RateLimit = redis.NewScript(prelude + ratelimitSrc)
+	Enqueue     = redis.NewScript(prelude + enqueueSrc)
+	Start       = redis.NewScript(prelude + startSrc)
+	Complete    = redis.NewScript(prelude + completeSrc)
+	Fail        = redis.NewScript(prelude + failSrc)
+	Promote     = redis.NewScript(prelude + promoteSrc)
+	Replay      = redis.NewScript(prelude + replaySrc)
+	Purge       = redis.NewScript(prelude + purgeSrc)
+	Heartbeat   = redis.NewScript(prelude + heartbeatSrc)
+	RateLimit   = redis.NewScript(prelude + ratelimitSrc)
+	Release     = redis.NewScript(prelude + releaseSrc)
+	DelConsumer = redis.NewScript(prelude + delconsumerSrc)
 )
 
 // Status extracts the leading status string from a script reply of the form

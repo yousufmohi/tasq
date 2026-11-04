@@ -28,7 +28,11 @@ type delivery struct {
 	reclaimed bool
 }
 
-func (w *Worker) process(ctx context.Context, d delivery) {
+// process starts, runs and settles one delivery. ctx is used for Redis calls
+// and is never cancelled by shutdown, so a job can always be completed,
+// failed or released. handlerBase is the parent of the handler's context;
+// shutdown cancels it once the drain timeout expires.
+func (w *Worker) process(ctx, handlerBase context.Context, d delivery) {
 	id, _ := d.msg.Values["id"].(string)
 	log := w.log.With("job_id", id, "entry", d.msg.ID)
 	if id == "" {
@@ -69,7 +73,7 @@ func (w *Worker) process(ctx context.Context, d delivery) {
 	}
 	log = log.With("type", j.Type, "attempt", j.Attempts, "reclaimed", d.reclaimed)
 
-	jctx, cancel := context.WithCancelCause(ctx)
+	jctx, cancel := context.WithCancelCause(handlerBase)
 	defer cancel(nil)
 	w.leases.add(&inflight{
 		jkey: jkey, stream: d.stream, entry: d.msg.ID, token: token,
@@ -82,7 +86,14 @@ func (w *Worker) process(ctx context.Context, d delivery) {
 		w.complete(ctx, log, d, jkey, token)
 		return
 	}
-	if cause := context.Cause(jctx); errors.Is(cause, errLeaseLost) || errors.Is(cause, errLeaseExpired) {
+	cause := context.Cause(jctx)
+	if errors.Is(cause, errShutdown) {
+		// We interrupted it; the job did nothing wrong. Hand it back now
+		// rather than burning an attempt and a backoff delay.
+		w.release(ctx, jkey, d.stream, d.msg.ID, token)
+		return
+	}
+	if errors.Is(cause, errLeaseLost) || errors.Is(cause, errLeaseExpired) {
 		// The job may belong to another worker now. Reporting a failure
 		// would be fenced anyway (LEASE_LOST) or, if our lease turns out to
 		// be intact, would burn a retry for a failure we caused ourselves.
