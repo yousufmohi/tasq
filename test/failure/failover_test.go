@@ -80,10 +80,20 @@ func TestFailoverDemo(t *testing.T) {
 
 			prdb := primary.Client(t)
 			rrdb := replica.Client(t)
-			testutil.WaitFor(t, 30*time.Second, "replication link up", func() bool {
-				info, _ := rrdb.Info(ctx, "replication").Result()
-				return strings.Contains(info, "master_link_status:up")
-			})
+			t0 := time.Now()
+			var info string
+			for deadline := time.Now().Add(30 * time.Second); ; {
+				info, _ = rrdb.Info(ctx, "replication").Result()
+				if strings.Contains(info, "master_link_status:up") {
+					break
+				}
+				if time.Now().After(deadline) {
+					// Setup failure, not a result: say so, with the replica's view.
+					t.Fatalf("SETUP: replication link not up after 30s; replica INFO replication:\n%s", info)
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			t.Logf("replication link up after %v", time.Since(t0).Round(time.Millisecond))
 			uri, _ := tp.URI(ctx)
 			proxy, err := toxiclient.NewClient(uri).Proxy("replication")
 			if err != nil {

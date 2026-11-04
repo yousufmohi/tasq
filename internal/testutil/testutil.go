@@ -54,7 +54,25 @@ func StartRedis(ctx context.Context, extraArgs ...string) (*Redis, error) {
 }
 
 // StartRedisWith starts a container with options.
+//
+// Docker Desktop occasionally never brings up the host port-forward for a
+// freshly published port when many containers are created in quick
+// succession (seen as a connection refused for the container's whole life
+// while other containers work). That is an environment fault, not a Redis
+// one, so a container unreachable from the host within 10s is replaced, up
+// to three attempts.
 func StartRedisWith(ctx context.Context, o RedisOptions) (*Redis, error) {
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		var r *Redis
+		if r, err = startRedisOnce(ctx, o); err == nil {
+			return r, nil
+		}
+	}
+	return nil, err
+}
+
+func startRedisOnce(ctx context.Context, o RedisOptions) (*Redis, error) {
 	cmd := append([]string{
 		"redis-server",
 		"--appendonly", "yes",
@@ -91,7 +109,31 @@ func StartRedisWith(ctx context.Context, o RedisOptions) (*Redis, error) {
 		_ = testcontainers.TerminateContainer(c)
 		return nil, err
 	}
+	// The wait strategy only proves Redis is ready *inside* the container.
+	// With Docker Desktop the host port-forward can come up a moment later,
+	// so the first connection was occasionally refused (3 of 10 runs).
+	// Wait until Redis answers from the host.
+	if err := waitPing(ctx, addr); err != nil {
+		_ = testcontainers.TerminateContainer(c)
+		return nil, err
+	}
 	return &Redis{Addr: addr, c: c}, nil
+}
+
+// waitPing waits until Redis at addr answers PING from this host (it also
+// rides through LOADING while an AOF is replayed after a restart).
+func waitPing(ctx context.Context, addr string) error {
+	rdb := redis.NewClient(&redis.Options{Addr: addr, MaxRetries: -1,
+		DialTimeout: time.Second, ReadTimeout: time.Second})
+	defer rdb.Close()
+	var err error
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		if err = rdb.Ping(ctx).Err(); err == nil {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("redis at %s not reachable from the host: %w", addr, err)
 }
 
 func freePort() (int, error) {
@@ -134,15 +176,7 @@ func (r *Redis) Start(ctx context.Context) error {
 	if err := r.c.Start(ctx); err != nil {
 		return err
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: r.Addr})
-	defer rdb.Close()
-	for range 200 {
-		if rdb.Ping(ctx).Err() == nil {
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return fmt.Errorf("redis did not come back at %s", r.Addr)
+	return waitPing(ctx, r.Addr)
 }
 
 // Exec runs a command inside the container.
