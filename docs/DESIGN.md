@@ -1,8 +1,9 @@
 # taskq: Design
 
 Numbers here are configuration defaults unless a test or
-benchmark is cited. Measured results live in `results/failure/` and
-`bench/results/`, and are summarised in `bench/results/*/summary.md` and `docs/FAILURE_MODES.md`.
+benchmark is cited. Measured results live in `results/` and
+`bench/results/`, each directory with its own `summary.md`, and are
+summarised in `docs/FAILURE_MODES.md`.
 
 ## 1. Goals and non-goals
 
@@ -244,10 +245,11 @@ jobs' priority) needs a periodic rescoring scan and gives no simple bound. A
 `XAUTOCLAIM`, so I'd have to rebuild them.
 
 *Cost, as implemented:* one round trip per fetch, for up to `n` jobs. The
-first version tried each stream from the client, one entry per round trip.
-Under 50 ms of injected latency it took 39.4 s to drain 300 jobs (development test logs; the final recorded run is in `results/failure/TestToxiproxyLatency.json`). Moving the
-reads into `fetch.lua` cut that to 21.4 s, and batching up to the free slots
-cut it to 9.1 s (`TestToxiproxyLatency`). Batching doesn't change the
+first version tried each stream from the client, one entry per round trip,
+which was much slower under injected latency; those development measurements
+were not saved, so no figure is given for them. With `fetch.lua` and batching
+up to the free slots, the recorded runs drain 300 jobs through 50 ms ± 10 ms of
+latency each way in 9.2–9.7 s (`TestToxiproxyLatency`, 5 runs, `results/failure/20261104T180504Z/summary.md`). Batching doesn't change the
 weighting: which stream a fetch picks is still weighted, and batch size
 doesn't depend on the stream picked.
 
@@ -440,19 +442,27 @@ replica or AOF reload sees all of a script's writes or none of them.
 Redis acknowledges a write once it's applied in memory on the primary.
 Durability depends on configuration:
 
-| Config | Single-node crash (SIGKILL / power loss) |
-|---|---|
-| no persistence | everything |
-| RDB snapshots | everything since the last snapshot |
-| AOF `appendfsync everysec` (Compose default) | up to ~1s of writes (more if fsync stalls) |
-| AOF `appendfsync always` | nothing that was acknowledged, at a large throughput cost |
-| `everysec` + per-enqueue `WAITAOF 1 0` | acknowledged *enqueues* survive; acks, retries and promotions may still roll back |
+| Config | Redis process killed (SIGKILL) | Host crash or power loss (unsynced writes dropped) |
+|---|---|---|
+| no persistence | everything not yet executed (measured) | everything not yet executed (measured) |
+| RDB snapshots | everything since the last snapshot (not tested) | same (not tested) |
+| AOF `appendfsync everysec` (Compose default) | nothing measured: the kernel page cache survives a process kill | the writes since the last fsync: measured loss reached back 498–898 ms |
+| AOF `appendfsync always` | nothing that was acknowledged (asserted) | nothing that was acknowledged (asserted) |
+| `everysec` + per-enqueue `WAITAOF 1 0` | acknowledged *enqueues* survive; acks, retries and promotions may still roll back (not tested) | same (not tested) |
+
+"Measured" and "asserted" refer to `TestRedisRestart` (5 runs, `results/failure/20261104T180504Z/summary.md`). Host
+crashes are simulated with LazyFS (`test/failure/lazyfs`), a FUSE file
+system that drops every write not yet fsynced. The throughput cost of
+`always` in those tests: 8 producers had 2,150–2,283 enqueues acknowledged in
+the 1.5 s before the disruption, against 3,843–3,998 with `everysec`
+(graceful-restart case).
 
 **Replication is asynchronous.** When a primary fails and Sentinel (or an
 operator) promotes a replica, writes inside the replication lag window are lost:
 
-- **Lost enqueues** → acknowledged jobs vanish. *This is the only way taskq
-  loses an acknowledged job*, and it's a Redis-level loss.
+- **Lost enqueues** → acknowledged jobs vanish. Together with a host crash
+  under `everysec` (table above), *this is how taskq loses an acknowledged
+  job*, and both are Redis-level losses.
 - **Lost `complete`/`fail`** → the job reappears in the PEL and is re-run (D3).
 - **Lost `promote`/`start`/token rotation** → re-executed, never lost.
 - **Lost idempotency keys** → a producer retry can create a duplicate (D4).
@@ -468,7 +478,9 @@ operator) promotes a replica, writes inside the replication lag window are lost:
   failover can still promote a replica that didn't receive it (for example, the
   acking replica is the one that died). The Redis documentation says plainly that
   `WAIT` doesn't make Redis strongly consistent.
-- The cost: one replica round trip per enqueue. The benchmark measures it.
+- The cost: one replica round trip per enqueue. No benchmark isolates it; the
+  failover demonstration records how many enqueues each mode had
+  acknowledged after its first second (`results/failure/20261104T180504Z/summary.md`).
 - Jobs whose loss is unacceptable belong in a system with consensus
   replication (Kafka with `acks=all` + `min.insync.replicas`, or a database
   using an outbox). This is a stated tradeoff, not an oversight.
@@ -539,8 +551,10 @@ standard library. Job IDs are 128-bit random hex, with no UUID dependency.
   - SIGKILL 1..k worker processes mid-job (workers run as subprocesses, since
     goroutines can't be SIGKILLed).
   - Redis restart: graceful (`SHUTDOWN`) and SIGKILL, under `everysec` and
-    `always`. The test asserts zero loss where the config guarantees it and
-    *reports* the observed loss where it doesn't (`everysec` + SIGKILL).
+    `always`, plus simulated host crashes (LazyFS drops unsynced writes) under
+    `always`, `everysec` and `no`. The test asserts zero loss where the config
+    guarantees it, *reports* the observed loss where it doesn't (`everysec`),
+    and requires loss in the positive controls (no persistence, `no`).
   - Toxiproxy: latency (e.g. 50ms ± jitter), latency above the visibility timeout
     (forced false reclaim → duplicates expected and counted), a partition via the
     `timeout` toxic, and connection resets.
@@ -555,7 +569,13 @@ standard library. Job IDs are 128-bit random hex, with no UUID dependency.
   SIGKILL until every orphaned job is complete, reported against
   `visibility_timeout`. Each run writes raw per-job samples plus a summary JSON
   with git SHA, Go/Redis/Docker versions, CPU, memory and config. Percentiles
-  are computed from raw samples (sorted), not from Prometheus buckets.
+  are computed from raw samples (sorted), not from Prometheus buckets. CPU is
+  sampled every 100 ms for Redis's main thread and process, the workers, the
+  client and the whole VM, to show which component limits throughput.
+- **Repetition:** benchmarks and the failure suite run 5 times
+  (`bench/run.sh`, `bench/failure.sh`) and the unit + integration suite 3
+  times (`bench/integration.sh`), each from a clean checkout, keeping every
+  report and log.
 
 ## 12. Decisions
 
@@ -564,5 +584,5 @@ standard library. Job IDs are 128-bit random hex, with no UUID dependency.
 2. **Failover test:** manual replica promotion (primary + one replica). This is a
    demonstration that reports loss with and without `WAIT`. No Sentinel.
 3. **Default durability:** AOF `appendfsync everysec`, with `WAITAOF`/`WAIT`
-   opt-in per enqueue. `always` is exercised in the Redis-restart failure tests
-   and in benchmarks for comparison.
+   opt-in per enqueue. `always` is exercised in the Redis-restart and
+   host-crash failure tests; the benchmarks use `everysec` only.
