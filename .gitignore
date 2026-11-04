@@ -1,4 +1,5 @@
 /bin/
 *.test
 *.out
-/bench/results/tmp/
+/bench/results/dev/
+/bench/bin/
