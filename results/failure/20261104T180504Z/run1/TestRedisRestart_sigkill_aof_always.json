@@ -1,0 +1,31 @@
+{
+  "test": "TestRedisRestart/sigkill_aof_always",
+  "zero_loss_asserted": true,
+  "acked": 4606,
+  "succeeded": 4606,
+  "dead": 0,
+  "lost": 0,
+  "forgotten_after_success": 0,
+  "executions": 4607,
+  "duplicate_executions": 1,
+  "effects": 4607,
+  "duplicate_effects": 1,
+  "once_effects": 4606,
+  "duplicate_once_effects": 0,
+  "applied": 4606,
+  "applied_not_acked": 0,
+  "reclaimed": 2,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "acked_before_disruption": 2219,
+    "enqueue_errors": 2,
+    "expectation": "none",
+    "outage_ms": 447,
+    "redis_args": [
+      "--appendfsync",
+      "always"
+    ],
+    "why": "every write is fsynced before Redis replies"
+  },
+  "recorded_at": "2026-11-04T18:06:29Z"
+}

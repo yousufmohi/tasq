@@ -1,0 +1,26 @@
+{
+  "test": "TestToxiproxyPartitionOneWorker",
+  "zero_loss_asserted": true,
+  "acked": 60,
+  "succeeded": 60,
+  "dead": 0,
+  "lost": 0,
+  "forgotten_after_success": 0,
+  "executions": 68,
+  "duplicate_executions": 8,
+  "effects": 68,
+  "duplicate_effects": 8,
+  "once_effects": 60,
+  "duplicate_once_effects": 0,
+  "applied": 60,
+  "applied_not_acked": 0,
+  "reclaimed": 8,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "a_in_flight_at_cut": 8,
+    "partition": "4s silent (timeout toxic) on worker A only",
+    "seconds_from_cut_to_all_done": 4.00990941,
+    "visibility_timeout": "1s"
+  },
+  "recorded_at": "2026-11-04T18:23:20Z"
+}

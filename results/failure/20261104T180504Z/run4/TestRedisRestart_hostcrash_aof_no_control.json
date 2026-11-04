@@ -1,0 +1,33 @@
+{
+  "test": "TestRedisRestart/hostcrash_aof_no_control",
+  "zero_loss_asserted": false,
+  "acked": 7487,
+  "succeeded": 3605,
+  "dead": 0,
+  "lost": 2904,
+  "forgotten_after_success": 978,
+  "executions": 4583,
+  "duplicate_executions": 0,
+  "effects": 4583,
+  "duplicate_effects": 0,
+  "once_effects": 4583,
+  "duplicate_once_effects": 0,
+  "applied": 4583,
+  "applied_not_acked": 0,
+  "reclaimed": 0,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "acked_before_disruption": 3744,
+    "enqueue_errors": 0,
+    "expectation": "some",
+    "lost_window_ms": 1087,
+    "outage_ms": 129,
+    "redis_args": [
+      "--appendfsync",
+      "no"
+    ],
+    "simulation": "LazyFS clear-cache: unsynced writes dropped (test/failure/lazyfs)",
+    "why": "positive control: Redis never fsyncs, so the simulated crash must lose acked jobs; this proves the crash simulation really drops unsynced data"
+  },
+  "recorded_at": "2026-11-04T18:18:52Z"
+}

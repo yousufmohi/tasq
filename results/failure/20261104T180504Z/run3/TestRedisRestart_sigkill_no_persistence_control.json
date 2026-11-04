@@ -1,0 +1,32 @@
+{
+  "test": "TestRedisRestart/sigkill_no_persistence_control",
+  "zero_loss_asserted": false,
+  "acked": 8082,
+  "succeeded": 4035,
+  "dead": 0,
+  "lost": 3059,
+  "forgotten_after_success": 988,
+  "executions": 5023,
+  "duplicate_executions": 0,
+  "effects": 5023,
+  "duplicate_effects": 0,
+  "once_effects": 5023,
+  "duplicate_once_effects": 0,
+  "applied": 5023,
+  "applied_not_acked": 0,
+  "reclaimed": 0,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "acked_before_disruption": 3975,
+    "enqueue_errors": 0,
+    "expectation": "some",
+    "lost_window_ms": 1127,
+    "outage_ms": 462,
+    "redis_args": [
+      "--appendonly",
+      "no"
+    ],
+    "why": "positive control: with no persistence, everything not yet executed is lost"
+  },
+  "recorded_at": "2026-11-04T18:15:22Z"
+}

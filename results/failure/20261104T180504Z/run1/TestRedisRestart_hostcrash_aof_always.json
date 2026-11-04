@@ -1,0 +1,32 @@
+{
+  "test": "TestRedisRestart/hostcrash_aof_always",
+  "zero_loss_asserted": true,
+  "acked": 7234,
+  "succeeded": 7234,
+  "dead": 0,
+  "lost": 0,
+  "forgotten_after_success": 0,
+  "executions": 7234,
+  "duplicate_executions": 0,
+  "effects": 7234,
+  "duplicate_effects": 0,
+  "once_effects": 7234,
+  "duplicate_once_effects": 0,
+  "applied": 7234,
+  "applied_not_acked": 0,
+  "reclaimed": 0,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "acked_before_disruption": 3572,
+    "enqueue_errors": 0,
+    "expectation": "none",
+    "outage_ms": 194,
+    "redis_args": [
+      "--appendfsync",
+      "always"
+    ],
+    "simulation": "LazyFS clear-cache: unsynced writes dropped (test/failure/lazyfs)",
+    "why": "every write is fsynced before Redis replies, so dropping unsynced data loses nothing acked"
+  },
+  "recorded_at": "2026-11-04T18:07:01Z"
+}

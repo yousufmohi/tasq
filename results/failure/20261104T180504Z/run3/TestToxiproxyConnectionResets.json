@@ -1,0 +1,23 @@
+{
+  "test": "TestToxiproxyConnectionResets",
+  "zero_loss_asserted": true,
+  "acked": 400,
+  "succeeded": 400,
+  "dead": 0,
+  "lost": 0,
+  "forgotten_after_success": 0,
+  "executions": 404,
+  "duplicate_executions": 4,
+  "effects": 404,
+  "duplicate_effects": 4,
+  "once_effects": 400,
+  "duplicate_once_effects": 0,
+  "applied": 400,
+  "applied_not_acked": 0,
+  "reclaimed": 6,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "flaps": "10 x (150ms down, 150ms up)"
+  },
+  "recorded_at": "2026-11-04T18:16:12Z"
+}

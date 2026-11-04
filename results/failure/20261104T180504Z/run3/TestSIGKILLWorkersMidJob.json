@@ -1,0 +1,27 @@
+{
+  "test": "TestSIGKILLWorkersMidJob",
+  "zero_loss_asserted": true,
+  "acked": 401,
+  "succeeded": 400,
+  "dead": 1,
+  "lost": 0,
+  "forgotten_after_success": 0,
+  "executions": 445,
+  "duplicate_executions": 44,
+  "effects": 400,
+  "duplicate_effects": 0,
+  "once_effects": 400,
+  "duplicate_once_effects": 0,
+  "applied": 400,
+  "applied_not_acked": 0,
+  "reclaimed": 29,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "concurrency": 8,
+    "processes_started": 17,
+    "sigkills": 10,
+    "visibility_timeout": "1500ms",
+    "worker_processes": 4
+  },
+  "recorded_at": "2026-11-04T18:15:33Z"
+}

@@ -1,0 +1,297 @@
+{
+  "config": {
+    "name": "drain_w8_c16_s0_rep3",
+    "mode": "drain",
+    "workers": 8,
+    "concurrency": 16,
+    "jobs": 20000,
+    "rate": 1000,
+    "duration_s": 20,
+    "handler_sleep_ms": 0,
+    "visibility_timeout": "5s",
+    "kill": 1,
+    "warmup_s": 5,
+    "rep": 3
+  },
+  "succeeded": 20000,
+  "not_done": 0,
+  "throughput_jobs_per_s": 10520.778537611783,
+  "queue_wait": {
+    "n": 20000,
+    "p50_ms": 1265,
+    "p95_ms": 1850,
+    "p99_ms": 1899,
+    "max_ms": 1912,
+    "mean_ms": 1273.8627
+  },
+  "enqueue_errors": 0,
+  "jobs_started_more_than_once": 0,
+  "cpu": {
+    "window_s": 2.012,
+    "host_cores": 12,
+    "mean": {
+      "redis_main_thread": 0.939,
+      "redis_process": 0.943,
+      "workers": 1.928,
+      "client": 0.009,
+      "host_busy": 4.704
+    },
+    "median": {
+      "redis_main_thread": 0.991,
+      "redis_process": 0.992,
+      "workers": 2.007,
+      "client": 0.008,
+      "host_busy": 4.976
+    },
+    "interval_s": 0.1,
+    "samples": [
+      {
+        "t_s": 0,
+        "redis_main_thread": 0.932,
+        "redis_process": 0.932,
+        "workers": 2.378,
+        "client": 0.022,
+        "host_busy": 5.744
+      },
+      {
+        "t_s": 0.101,
+        "redis_main_thread": 0.986,
+        "redis_process": 0.986,
+        "workers": 2.005,
+        "client": 0.009,
+        "host_busy": 4.04
+      },
+      {
+        "t_s": 0.201,
+        "redis_main_thread": 1.002,
+        "redis_process": 1.002,
+        "workers": 2.493,
+        "client": 0.01,
+        "host_busy": 5.115
+      },
+      {
+        "t_s": 0.301,
+        "redis_main_thread": 0.998,
+        "redis_process": 0.998,
+        "workers": 1.904,
+        "client": 0.009,
+        "host_busy": 3.961
+      },
+      {
+        "t_s": 0.401,
+        "redis_main_thread": 0.992,
+        "redis_process": 0.992,
+        "workers": 2.002,
+        "client": 0.007,
+        "host_busy": 5.143
+      },
+      {
+        "t_s": 0.501,
+        "redis_main_thread": 0.985,
+        "redis_process": 1.035,
+        "workers": 2.093,
+        "client": 0.007,
+        "host_busy": 5.268
+      },
+      {
+        "t_s": 0.601,
+        "redis_main_thread": 0.998,
+        "redis_process": 0.998,
+        "workers": 2.101,
+        "client": 0.008,
+        "host_busy": 4.615
+      },
+      {
+        "t_s": 0.701,
+        "redis_main_thread": 0.989,
+        "redis_process": 0.989,
+        "workers": 1.992,
+        "client": 0.01,
+        "host_busy": 4.78
+      },
+      {
+        "t_s": 0.801,
+        "redis_main_thread": 1.001,
+        "redis_process": 1.001,
+        "workers": 2.01,
+        "client": 0.009,
+        "host_busy": 4.976
+      },
+      {
+        "t_s": 0.901,
+        "redis_main_thread": 0.98,
+        "redis_process": 0.98,
+        "workers": 1.897,
+        "client": 0.009,
+        "host_busy": 5.143
+      },
+      {
+        "t_s": 1.001,
+        "redis_main_thread": 1.003,
+        "redis_process": 1.003,
+        "workers": 1.903,
+        "client": 0.008,
+        "host_busy": 4.696
+      },
+      {
+        "t_s": 1.101,
+        "redis_main_thread": 0.99,
+        "redis_process": 0.99,
+        "workers": 2.007,
+        "client": 0.008,
+        "host_busy": 4.632
+      },
+      {
+        "t_s": 1.201,
+        "redis_main_thread": 0.978,
+        "redis_process": 0.978,
+        "workers": 2.1,
+        "client": 0.01,
+        "host_busy": 4.737
+      },
+      {
+        "t_s": 1.3,
+        "redis_main_thread": 0.998,
+        "redis_process": 0.998,
+        "workers": 2.183,
+        "client": 0.009,
+        "host_busy": 5.197
+      },
+      {
+        "t_s": 1.401,
+        "redis_main_thread": 0.997,
+        "redis_process": 0.997,
+        "workers": 1.804,
+        "client": 0.008,
+        "host_busy": 5.213
+      },
+      {
+        "t_s": 1.501,
+        "redis_main_thread": 0.996,
+        "redis_process": 1.033,
+        "workers": 2.01,
+        "client": 0.007,
+        "host_busy": 5.291
+      },
+      {
+        "t_s": 1.601,
+        "redis_main_thread": 0.976,
+        "redis_process": 0.976,
+        "workers": 2.086,
+        "client": 0.008,
+        "host_busy": 4.976
+      },
+      {
+        "t_s": 1.701,
+        "redis_main_thread": 0.991,
+        "redis_process": 0.991,
+        "workers": 1.7,
+        "client": 0.008,
+        "host_busy": 5.636
+      },
+      {
+        "t_s": 1.801,
+        "redis_main_thread": 0.997,
+        "redis_process": 0.997,
+        "workers": 2.012,
+        "client": 0.007,
+        "host_busy": 4.5
+      },
+      {
+        "t_s": 1.901,
+        "redis_main_thread": 0.095,
+        "redis_process": 0.095,
+        "workers": 0.099,
+        "client": 0.008,
+        "host_busy": 0.5
+      },
+      {
+        "t_s": 2.001,
+        "redis_main_thread": 0.016,
+        "redis_process": 0.016,
+        "workers": 0,
+        "client": 0.061,
+        "host_busy": 0
+      }
+    ]
+  },
+  "cpu_enqueue": {
+    "window_s": 0.645,
+    "host_cores": 12,
+    "mean": {
+      "redis_main_thread": 0.978,
+      "redis_process": 0.98,
+      "workers": 0,
+      "client": 1.571,
+      "host_busy": 4.602
+    },
+    "median": {
+      "redis_main_thread": 0.996,
+      "redis_process": 0.996,
+      "workers": 0,
+      "client": 1.571,
+      "host_busy": 4.615
+    },
+    "interval_s": 0.1,
+    "samples": [
+      {
+        "t_s": 0,
+        "redis_main_thread": 1.021,
+        "redis_process": 1.021,
+        "workers": 0,
+        "client": 1.817,
+        "host_busy": 3.964
+      },
+      {
+        "t_s": 0.102,
+        "redis_main_thread": 0.93,
+        "redis_process": 0.942,
+        "workers": 0,
+        "client": 1.457,
+        "host_busy": 4.229
+      },
+      {
+        "t_s": 0.202,
+        "redis_main_thread": 0.93,
+        "redis_process": 0.931,
+        "workers": 0,
+        "client": 1.44,
+        "host_busy": 4.525
+      },
+      {
+        "t_s": 0.302,
+        "redis_main_thread": 0.996,
+        "redis_process": 0.996,
+        "workers": 0,
+        "client": 1.551,
+        "host_busy": 5.197
+      },
+      {
+        "t_s": 0.402,
+        "redis_main_thread": 0.998,
+        "redis_process": 0.998,
+        "workers": 0,
+        "client": 1.584,
+        "host_busy": 4.615
+      },
+      {
+        "t_s": 0.502,
+        "redis_main_thread": 1.004,
+        "redis_process": 1.004,
+        "workers": 0,
+        "client": 1.571,
+        "host_busy": 4.8
+      },
+      {
+        "t_s": 0.602,
+        "redis_main_thread": 0.948,
+        "redis_process": 0.948,
+        "workers": 0,
+        "client": 1.584,
+        "host_busy": 5
+      }
+    ]
+  },
+  "raw_file": "raw/drain_w8_c16_s0_rep3.csv.gz",
+  "recorded_at": "2026-11-04T17:53:55Z"
+}

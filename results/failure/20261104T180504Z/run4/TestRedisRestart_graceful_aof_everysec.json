@@ -1,0 +1,31 @@
+{
+  "test": "TestRedisRestart/graceful_aof_everysec",
+  "zero_loss_asserted": true,
+  "acked": 8207,
+  "succeeded": 8207,
+  "dead": 0,
+  "lost": 0,
+  "forgotten_after_success": 0,
+  "executions": 8217,
+  "duplicate_executions": 6,
+  "effects": 8217,
+  "duplicate_effects": 6,
+  "once_effects": 8211,
+  "duplicate_once_effects": 0,
+  "applied": 8211,
+  "applied_not_acked": 4,
+  "reclaimed": 6,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "acked_before_disruption": 3949,
+    "enqueue_errors": 6,
+    "expectation": "none",
+    "outage_ms": 555,
+    "redis_args": [
+      "--appendfsync",
+      "everysec"
+    ],
+    "why": "SIGTERM makes Redis fsync the AOF before exiting"
+  },
+  "recorded_at": "2026-11-04T18:17:24Z"
+}

@@ -1,0 +1,26 @@
+{
+  "test": "TestToxiproxyLatency",
+  "zero_loss_asserted": true,
+  "acked": 300,
+  "succeeded": 300,
+  "dead": 0,
+  "lost": 0,
+  "forgotten_after_success": 0,
+  "executions": 300,
+  "duplicate_executions": 0,
+  "effects": 300,
+  "duplicate_effects": 0,
+  "once_effects": 300,
+  "duplicate_once_effects": 0,
+  "applied": 300,
+  "applied_not_acked": 0,
+  "reclaimed": 0,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "concurrency": 8,
+    "latency_ms_each_way": "50±10",
+    "seconds_to_drain_300_jobs": 9.654644144,
+    "workers": 2
+  },
+  "recorded_at": "2026-11-04T18:23:11Z"
+}

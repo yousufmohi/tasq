@@ -1,0 +1,33 @@
+{
+  "test": "TestRedisRestart/hostcrash_aof_everysec",
+  "zero_loss_asserted": false,
+  "acked": 7203,
+  "succeeded": 5094,
+  "dead": 0,
+  "lost": 2109,
+  "forgotten_after_success": 0,
+  "executions": 5684,
+  "duplicate_executions": 590,
+  "effects": 5684,
+  "duplicate_effects": 590,
+  "once_effects": 5094,
+  "duplicate_once_effects": 0,
+  "applied": 5094,
+  "applied_not_acked": 0,
+  "reclaimed": 15,
+  "succeeded_without_execution": 0,
+  "extra": {
+    "acked_before_disruption": 3637,
+    "enqueue_errors": 0,
+    "expectation": "report",
+    "lost_window_ms": 821,
+    "outage_ms": 135,
+    "redis_args": [
+      "--appendfsync",
+      "everysec"
+    ],
+    "simulation": "LazyFS clear-cache: unsynced writes dropped (test/failure/lazyfs)",
+    "why": "Redis fsyncs the AOF about once per second; writes acked since the last fsync are lost"
+  },
+  "recorded_at": "2026-11-04T18:18:31Z"
+}
