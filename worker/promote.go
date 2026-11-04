@@ -35,6 +35,7 @@ func (w *Worker) promoteLoop(ctx context.Context) {
 // promoteOnce runs one bounded promotion and reports whether it hit the
 // batch limit.
 func (w *Worker) promoteOnce(ctx context.Context) (full bool, err error) {
+	defer w.metrics.scriptTimer("promote")()
 	q := w.opts.Queue
 	res, err := scripts.Promote.Run(ctx, w.rdb, []string{keys.Sched(q)},
 		keys.Prefix(q), promoteBatch, state.SourcesCSV(state.Promote)).Slice()

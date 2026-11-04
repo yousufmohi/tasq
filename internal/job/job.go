@@ -33,6 +33,9 @@ type Job struct {
 	// IdemKey is the enqueue idempotency key, if the producer supplied one.
 	IdemKey string
 
+	// TraceParent and TraceState carry the producer's W3C trace context.
+	TraceParent, TraceState string
+
 	// StreamEntry is the ID of the job's live stream entry, if any.
 	StreamEntry string
 	// LeaseToken fences state changes; only the worker holding the current
@@ -94,6 +97,8 @@ func FromMap(m map[string]string) (*Job, error) {
 		LeaseToken:  m["lease_token"],
 		StreamEntry: m["stream_entry"],
 		IdemKey:     m["idem_key"],
+		TraceParent: m["traceparent"],
+		TraceState:  m["tracestate"],
 	}
 	var err error
 	if j.RunAt, err = ms(m, "run_at_ms"); err != nil {

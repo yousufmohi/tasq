@@ -5,7 +5,7 @@
 -- ARGV[4] retention ms (0 = keep forever)
 -- ARGV[5] allowed source states (csv, from state.Complete)
 --
--- Returns {'OK'} | {'MISSING'} | {'LEASE_LOST'} | {'INVALID_STATE', state}.
+-- Returns {'OK', finished_ms} | {'MISSING'} | {'LEASE_LOST'} | {'INVALID_STATE', state}.
 -- On LEASE_LOST nothing is written: another worker owns the job now, and
 -- acking its entry would hide the job from crash recovery.
 --
@@ -27,10 +27,11 @@ if not allowed(f[1], ARGV[5]) then
 end
 
 ack_del(KEYS[2], ARGV[1], ARGV[2])
-redis.call('HSET', KEYS[1], 'state', 'succeeded', 'finished_ms', fmt(now_ms()))
+local finished = fmt(now_ms())
+redis.call('HSET', KEYS[1], 'state', 'succeeded', 'finished_ms', finished)
 redis.call('HDEL', KEYS[1], 'stream_entry')
 local ttl = tonumber(ARGV[4])
 if ttl > 0 then
   redis.call('PEXPIRE', KEYS[1], ttl)
 end
-return {'OK'}
+return {'OK', finished}

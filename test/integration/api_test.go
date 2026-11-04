@@ -26,9 +26,14 @@ type apiClient struct {
 
 func newAPI(t *testing.T, token string) *apiClient {
 	t.Helper()
-	srv := httptest.NewServer(api.New(testutil.Shared(t), api.Options{Token: token}).Handler())
+	return newAPIWith(t, api.Options{Token: token})
+}
+
+func newAPIWith(t *testing.T, o api.Options) *apiClient {
+	t.Helper()
+	srv := httptest.NewServer(api.New(testutil.Shared(t), o).Handler())
 	t.Cleanup(srv.Close)
-	return &apiClient{t: t, base: srv.URL, token: token}
+	return &apiClient{t: t, base: srv.URL, token: o.Token}
 }
 
 func (a *apiClient) do(method, path string, body any) (int, http.Header, map[string]any) {

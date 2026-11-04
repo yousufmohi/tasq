@@ -96,10 +96,12 @@ func (w *Worker) heartbeatOnce(ctx context.Context) {
 		// Bound each call so that a partition cannot stall the loop past the
 		// self-fencing deadline of the other jobs.
 		hctx, cancel := context.WithTimeout(ctx, w.opts.HeartbeatInterval/2)
+		done := w.metrics.scriptTimer("heartbeat")
 		res, err := scripts.Heartbeat.Run(hctx, w.rdb, []string{f.jkey, f.stream},
 			keys.Group, f.entry, w.opts.Consumer, f.token,
 			w.opts.VisibilityTimeout.Milliseconds()).Result()
 		cancel()
+		done()
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -107,6 +109,7 @@ func (w *Worker) heartbeatOnce(ctx context.Context) {
 			if time.Since(f.lastRenewed) > deadline {
 				w.log.Warn("lease renewal failing past safety margin; cancelling handler",
 					"entry", f.entry, "err", err)
+				w.metrics.lostLease(w.opts.Queue, "renewal_failed")
 				f.cancel(errLeaseExpired)
 				w.leases.remove(f.entry)
 			} else {
@@ -120,6 +123,7 @@ func (w *Worker) heartbeatOnce(ctx context.Context) {
 			continue
 		}
 		w.log.Warn("lease lost; cancelling handler", "entry", f.entry, "reason", rest)
+		w.metrics.lostLease(w.opts.Queue, "taken_over")
 		f.cancel(errLeaseLost)
 		w.leases.remove(f.entry)
 	}

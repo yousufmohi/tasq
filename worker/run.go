@@ -123,29 +123,35 @@ func (w *Worker) drain(ctx context.Context, wg *sync.WaitGroup, cancelJobs conte
 
 	stuck := w.leases.snapshot()
 	for _, f := range stuck {
-		w.release(ctx, f.jkey, f.stream, f.entry, f.token)
+		if w.release(ctx, f.jkey, f.stream, f.entry, f.token) {
+			w.metrics.outcome(w.opts.Queue, OutcomeReleased, 0)
+		}
 		w.leases.remove(f.entry)
 	}
 	w.log.Error("handlers ignored cancellation; their jobs were released and may run twice",
 		"count", len(stuck))
 }
 
-// release returns an active job to its stream with the attempt refunded.
-func (w *Worker) release(ctx context.Context, jkey, stream, entry, token string) {
+// release returns an active job to its stream with the attempt refunded and
+// reports whether it did.
+func (w *Worker) release(ctx context.Context, jkey, stream, entry, token string) bool {
+	done := w.metrics.scriptTimer("release")
+	defer done()
 	res, err := scripts.Release.Run(ctx, w.rdb, []string{jkey, stream},
 		keys.Group, entry, token, state.SourcesCSV(state.Release), "1").Result()
 	if err != nil {
 		// Still in our PEL; another worker reclaims it after the
 		// visibility timeout.
 		w.log.Error("release failed; job will be reclaimed", "entry", entry, "err", err)
-		return
+		return false
 	}
 	status, rest, _ := scripts.Status(res)
 	if status != "OK" {
 		w.log.Warn("release rejected", "entry", entry, "status", status, "detail", rest)
-		return
+		return false
 	}
 	w.log.Info("job released for another worker", "entry", entry)
+	return true
 }
 
 // deleteConsumer removes this consumer from every stream's group if it owns

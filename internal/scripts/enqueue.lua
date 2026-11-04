@@ -10,6 +10,7 @@
 -- ARGV[7] timeout ms (0 = none)
 -- ARGV[8] delay ms (0 = run now), relative to the Redis clock
 -- ARGV[9] idempotency key value ('' = none)  ARGV[10] its TTL in ms
+-- ARGV[11] W3C traceparent ('' = none)  ARGV[12] tracestate
 --
 -- Returns {'OK', created_ms} | {'DUP', existing job id} | {'EXISTS', ''} |
 --         {'FULL', depth}.
@@ -62,6 +63,9 @@ redis.call('HSET', KEYS[1],
 if ARGV[9] ~= '' then
   redis.call('HSET', KEYS[1], 'idem_key', ARGV[9])
   redis.call('SET', KEYS[7], ARGV[1], 'PX', ARGV[10])
+end
+if ARGV[11] ~= '' then
+  redis.call('HSET', KEYS[1], 'traceparent', ARGV[11], 'tracestate', ARGV[12])
 end
 
 if delay > 0 then

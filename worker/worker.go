@@ -11,10 +11,14 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/yousufmo27/taskq"
 	"github.com/yousufmo27/taskq/internal/job"
 	"github.com/yousufmo27/taskq/internal/keys"
+	"github.com/yousufmo27/taskq/internal/obs"
 )
 
 // Handler processes one job. Returning nil completes it; returning an error
@@ -77,6 +81,12 @@ type Options struct {
 	// removed by the consumer GC. Default 1h. ConsumerGCInterval default 5m.
 	ConsumerTTL        time.Duration
 	ConsumerGCInterval time.Duration
+
+	// Metrics records Prometheus metrics; nil disables them. See NewMetrics.
+	Metrics *Metrics
+	// TracerProvider and Propagator default to the OpenTelemetry globals.
+	TracerProvider trace.TracerProvider
+	Propagator     propagation.TextMapPropagator
 
 	// SkipPolicyCheck disables the startup check that Redis uses
 	// maxmemory-policy noeviction. Only for Redis deployments that block
@@ -141,6 +151,12 @@ func (o *Options) setDefaults() error {
 	if o.ConsumerGCInterval <= 0 {
 		o.ConsumerGCInterval = 5 * time.Minute
 	}
+	if o.TracerProvider == nil {
+		o.TracerProvider = otel.GetTracerProvider()
+	}
+	if o.Propagator == nil {
+		o.Propagator = otel.GetTextMapPropagator()
+	}
 	return nil
 }
 
@@ -152,6 +168,8 @@ type Worker struct {
 	log     *slog.Logger
 	streams []string // priority streams, highest first
 	leases  *leases
+	metrics *Metrics
+	tracer  trace.Tracer
 
 	// Fetch-loop state; touched only by the goroutine running Run.
 	buffer        []delivery // extra entries from a multi-stream read
@@ -180,6 +198,8 @@ func New(rdb redis.UniversalClient, opts Options, h Handler) (*Worker, error) {
 		log:           opts.Logger.With("queue", opts.Queue, "consumer", opts.Consumer),
 		streams:       keys.Streams(opts.Queue),
 		leases:        newLeases(),
+		metrics:       opts.Metrics,
+		tracer:        opts.TracerProvider.Tracer(obs.TracerName),
 		reclaimCursor: []string{"0-0", "0-0", "0-0"},
 	}, nil
 }

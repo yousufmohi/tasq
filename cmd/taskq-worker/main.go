@@ -10,15 +10,20 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/yousufmo27/taskq/internal/demo"
+	"github.com/yousufmo27/taskq/internal/otelsetup"
 	"github.com/yousufmo27/taskq/worker"
 )
 
@@ -39,6 +44,7 @@ func run() error {
 		retryBase   = flag.Duration("retry-base", envDur("RETRY_BASE", time.Second), "retry backoff base (RETRY_BASE)")
 		retryMax    = flag.Duration("retry-max", envDur("RETRY_MAX", 10*time.Minute), "retry backoff cap (RETRY_MAX)")
 		logLevel    = flag.String("log-level", env("LOG_LEVEL", "info"), "debug|info|warn|error (LOG_LEVEL)")
+		metricsAddr = flag.String("metrics-addr", env("METRICS_ADDR", ":9090"), "serve /metrics and /healthz here; empty disables (METRICS_ADDR)")
 	)
 	flag.Parse()
 
@@ -55,8 +61,33 @@ func run() error {
 	defer stop()
 	go func() { <-ctx.Done(); stop() }()
 
+	shutdownTracing, err := otelsetup.Setup(ctx, "taskq-worker")
+	if err != nil {
+		return fmt.Errorf("tracing: %w", err)
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracing(sctx)
+	}()
+
 	rdb := redis.NewClient(&redis.Options{Addr: *redisAddr})
 	defer rdb.Close()
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	if *metricsAddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+		ms := &http.Server{Addr: *metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			if err := ms.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("metrics server", "err", err)
+			}
+		}()
+		defer ms.Close()
+	}
 
 	var rec *demo.Recorder
 	if *recordAddr != "" {
@@ -72,6 +103,7 @@ func run() error {
 		RetryBase:         *retryBase,
 		RetryMax:          *retryMax,
 		Logger:            log,
+		Metrics:           worker.NewMetrics(reg),
 	}, demo.Handler(rec))
 	if err != nil {
 		return err

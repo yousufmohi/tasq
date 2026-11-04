@@ -15,9 +15,14 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/yousufmo27/taskq/internal/job"
 	"github.com/yousufmo27/taskq/internal/keys"
+	"github.com/yousufmo27/taskq/internal/obs"
 	"github.com/yousufmo27/taskq/internal/scripts"
 	"github.com/yousufmo27/taskq/internal/state"
 )
@@ -66,10 +71,38 @@ const (
 type Client struct {
 	rdb    redis.UniversalClient
 	queues sync.Map // queue name -> struct{}: already registered in keys.Queues
+	tracer trace.Tracer
+	prop   propagation.TextMapPropagator
+}
+
+// Option configures a Client.
+type Option func(*clientOptions)
+
+type clientOptions struct {
+	tp   trace.TracerProvider
+	prop propagation.TextMapPropagator
+}
+
+// WithTracerProvider sets the OpenTelemetry tracer provider (default: the
+// global one).
+func WithTracerProvider(tp trace.TracerProvider) Option {
+	return func(o *clientOptions) { o.tp = tp }
+}
+
+// WithPropagator sets how trace context is written onto jobs (default: the
+// global propagator; binaries should install propagation.TraceContext).
+func WithPropagator(p propagation.TextMapPropagator) Option {
+	return func(o *clientOptions) { o.prop = p }
 }
 
 // NewClient wraps an existing go-redis client. The caller owns rdb.
-func NewClient(rdb redis.UniversalClient) *Client { return &Client{rdb: rdb} }
+func NewClient(rdb redis.UniversalClient, opts ...Option) *Client {
+	o := clientOptions{tp: otel.GetTracerProvider(), prop: otel.GetTextMapPropagator()}
+	for _, f := range opts {
+		f(&o)
+	}
+	return &Client{rdb: rdb, tracer: o.tp.Tracer(obs.TracerName), prop: o.prop}
+}
 
 // EnqueueOptions describes a job to enqueue.
 type EnqueueOptions struct {
@@ -107,7 +140,28 @@ var ErrDuplicate = errors.New("taskq: duplicate idempotency key")
 // Enqueue creates a job on queue and returns its ID. A nil error means Redis
 // applied the write on the primary; see docs/DESIGN.md §8 for what that does
 // and does not guarantee across a crash or failover.
-func (c *Client) Enqueue(ctx context.Context, queue string, o EnqueueOptions) (string, error) {
+//
+// Enqueue records a producer span and stores its trace context on the job, so
+// the worker's span can link back to it.
+func (c *Client) Enqueue(ctx context.Context, queue string, o EnqueueOptions) (id string, err error) {
+	ctx, span := c.tracer.Start(ctx, "send "+queue,
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(obs.System, obs.Destination.String(queue),
+			obs.Operation.String("send"), obs.JobType.String(o.Type)))
+	defer func() {
+		if id != "" {
+			span.SetAttributes(obs.MessageID.String(id))
+		}
+		if err != nil && !errors.Is(err, ErrDuplicate) {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "enqueue failed")
+		}
+		span.End()
+	}()
+	return c.enqueue(ctx, queue, o)
+}
+
+func (c *Client) enqueue(ctx context.Context, queue string, o EnqueueOptions) (string, error) {
 	if err := validQueue(queue); err != nil {
 		return "", err
 	}
@@ -153,11 +207,12 @@ func (c *Client) Enqueue(ctx context.Context, queue string, o EnqueueOptions) (s
 	c.register(ctx, queue)
 	id := job.NewID()
 	streams := keys.Streams(queue)
+	traceparent, tracestate := obs.Inject(ctx, c.prop)
 	res, err := scripts.Enqueue.Run(ctx, c.rdb,
 		[]string{keys.Job(queue, id), keys.Sched(queue), keys.Config(queue),
 			streams[0], streams[1], streams[2], keys.Idem(queue, o.IdempotencyKey)},
 		id, queue, o.Type, o.Payload, o.MaxAttempts, prio, o.Timeout.Milliseconds(),
-		delay.Milliseconds(), o.IdempotencyKey, idemTTL.Milliseconds(),
+		delay.Milliseconds(), o.IdempotencyKey, idemTTL.Milliseconds(), traceparent, tracestate,
 	).Result()
 	if err != nil {
 		return "", fmt.Errorf("taskq: enqueue: %w", err)

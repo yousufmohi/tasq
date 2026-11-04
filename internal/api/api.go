@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/yousufmo27/taskq"
@@ -27,8 +29,9 @@ type Options struct {
 	// every /v1 route. Health and metrics routes are unauthenticated.
 	Token  string
 	Logger *slog.Logger
-	// Metrics, if set, is served at /metrics.
-	Metrics http.Handler
+	// Registry, if set, receives the API and queue-depth metrics and is
+	// served at /metrics. Register worker or runtime collectors on it too.
+	Registry *prometheus.Registry
 }
 
 // Server holds the API's dependencies.
@@ -37,6 +40,7 @@ type Server struct {
 	rdb  redis.UniversalClient
 	opts Options
 	log  *slog.Logger
+	m    *metrics
 }
 
 // New returns the API server.
@@ -44,7 +48,12 @@ func New(rdb redis.UniversalClient, opts Options) *Server {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Server{c: taskq.NewClient(rdb), rdb: rdb, opts: opts, log: opts.Logger}
+	s := &Server{c: taskq.NewClient(rdb), rdb: rdb, opts: opts, log: opts.Logger}
+	if opts.Registry != nil {
+		s.m = newMetrics(opts.Registry)
+		opts.Registry.MustRegister(newQueueCollector(s.c, s.log))
+	}
+	return s
 }
 
 // Handler returns the routed HTTP handler.
@@ -67,10 +76,10 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /readyz", s.ready)
-	if s.opts.Metrics != nil {
-		mux.Handle("GET /metrics", s.opts.Metrics)
+	if s.opts.Registry != nil {
+		mux.Handle("GET /metrics", promhttp.HandlerFor(s.opts.Registry, promhttp.HandlerOpts{}))
 	}
-	return mux
+	return s.m.instrument(mux)
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
@@ -138,13 +147,21 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request) {
 	id, err := s.c.Enqueue(r.Context(), r.PathValue("queue"), o)
 	switch {
 	case err == nil:
+		s.m.enqueue(r.PathValue("queue"), "created")
 		writeJSON(w, http.StatusAccepted, EnqueueResponse{ID: id})
 	case errors.Is(err, taskq.ErrDuplicate):
+		s.m.enqueue(r.PathValue("queue"), "duplicate")
 		writeJSON(w, http.StatusOK, EnqueueResponse{ID: id, Duplicate: true})
 	case errors.Is(err, taskq.ErrQueueFull):
+		s.m.enqueue(r.PathValue("queue"), "full")
 		w.Header().Set("Retry-After", "1")
 		writeErr(w, http.StatusTooManyRequests, err.Error())
 	default:
+		if errors.Is(err, taskq.ErrInvalidArgument) {
+			s.m.enqueue(r.PathValue("queue"), "rejected")
+		} else {
+			s.m.enqueue(r.PathValue("queue"), "error")
+		}
 		s.clientErr(w, err)
 	}
 }

@@ -13,9 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/yousufmo27/taskq/internal/api"
+	"github.com/yousufmo27/taskq/internal/otelsetup"
 )
 
 func main() {
@@ -44,12 +47,25 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	shutdownTracing, err := otelsetup.Setup(ctx, "taskq-api")
+	if err != nil {
+		return fmt.Errorf("tracing: %w", err)
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracing(sctx)
+	}()
+
 	rdb := redis.NewClient(&redis.Options{Addr: *redisAddr})
 	defer rdb.Close()
 
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           api.New(rdb, api.Options{Token: token, Logger: log}).Handler(),
+		Handler:           api.New(rdb, api.Options{Token: token, Logger: log, Registry: reg}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

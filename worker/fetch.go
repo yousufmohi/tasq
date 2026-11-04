@@ -212,6 +212,7 @@ func (w *Worker) acquireToken(ctx context.Context) error {
 		if status == "OK" {
 			return nil
 		}
+		w.metrics.rateWait(q)
 		ms, _ := scripts.Int(rest[0])
 		sleep(ctx, min(time.Duration(ms)*time.Millisecond, time.Second))
 		if ctx.Err() != nil {

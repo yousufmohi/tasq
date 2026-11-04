@@ -84,7 +84,7 @@ func newFleet(t *testing.T, n int, args ...string) *fleet {
 func (f *fleet) spawn() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	p := startProc(f.t, f.logDir, f.started, f.args)
+	p := startProc(f.t, f.logDir, f.started, append([]string{"-metrics-addr", ""}, f.args...))
 	f.started++
 	f.procs = append(f.procs, p)
 	f.all = append(f.all, p)
