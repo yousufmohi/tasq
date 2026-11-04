@@ -165,7 +165,7 @@ type Worker struct {
 // New validates options and returns a Worker. It does not touch Redis.
 func New(rdb redis.UniversalClient, opts Options, h Handler) (*Worker, error) {
 	if err := keys.ValidateQueue(opts.Queue); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("worker: %w", err)
 	}
 	if h == nil {
 		return nil, errors.New("worker: nil handler")

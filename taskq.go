@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,28 +108,28 @@ var ErrDuplicate = errors.New("taskq: duplicate idempotency key")
 // applied the write on the primary; see docs/DESIGN.md §8 for what that does
 // and does not guarantee across a crash or failover.
 func (c *Client) Enqueue(ctx context.Context, queue string, o EnqueueOptions) (string, error) {
-	if err := keys.ValidateQueue(queue); err != nil {
+	if err := validQueue(queue); err != nil {
 		return "", err
 	}
 	if o.Type == "" {
-		return "", errors.New("taskq: job type is required")
+		return "", invalidf("job type is required")
 	}
 	if o.MaxAttempts == 0 {
 		o.MaxAttempts = DefaultMaxAttempts
 	}
 	if o.MaxAttempts < 1 {
-		return "", fmt.Errorf("taskq: MaxAttempts must be >= 1, got %d", o.MaxAttempts)
+		return "", invalidf("MaxAttempts must be >= 1, got %d", o.MaxAttempts)
 	}
 	if o.Timeout < 0 {
-		return "", fmt.Errorf("taskq: Timeout must be >= 0, got %v", o.Timeout)
+		return "", invalidf("Timeout must be >= 0, got %v", o.Timeout)
 	}
 	if o.Delay < 0 {
-		return "", fmt.Errorf("taskq: Delay must be >= 0, got %v", o.Delay)
+		return "", invalidf("Delay must be >= 0, got %v", o.Delay)
 	}
 	delay := o.Delay
 	if !o.RunAt.IsZero() {
 		if o.Delay != 0 {
-			return "", errors.New("taskq: set Delay or RunAt, not both")
+			return "", invalidf("set Delay or RunAt, not both")
 		}
 		delay = max(time.Until(o.RunAt), 0)
 	}
@@ -136,13 +138,13 @@ func (c *Client) Enqueue(ctx context.Context, queue string, o EnqueueOptions) (s
 		prio = keys.DefaultPriority
 	}
 	if !keys.ValidPriority(prio) {
-		return "", fmt.Errorf("taskq: invalid priority %q", prio)
+		return "", invalidf("unknown priority %q", prio)
 	}
 	if len(o.IdempotencyKey) > MaxIdempotencyKeyLen {
-		return "", fmt.Errorf("taskq: IdempotencyKey longer than %d bytes", MaxIdempotencyKeyLen)
+		return "", invalidf("IdempotencyKey longer than %d bytes", MaxIdempotencyKeyLen)
 	}
 	if o.IdempotencyTTL < 0 {
-		return "", fmt.Errorf("taskq: IdempotencyTTL must be >= 0, got %v", o.IdempotencyTTL)
+		return "", invalidf("IdempotencyTTL must be >= 0, got %v", o.IdempotencyTTL)
 	}
 	idemTTL := o.IdempotencyTTL
 	if idemTTL == 0 {
@@ -194,11 +196,11 @@ type QueueConfig struct {
 
 // SetQueueConfig stores cfg for queue.
 func (c *Client) SetQueueConfig(ctx context.Context, queue string, cfg QueueConfig) error {
-	if err := keys.ValidateQueue(queue); err != nil {
+	if err := validQueue(queue); err != nil {
 		return err
 	}
 	if cfg.MaxDepth < 0 || cfg.Rate < 0 || cfg.Burst < 0 {
-		return errors.New("taskq: queue config values must be >= 0")
+		return invalidf("queue config values must be >= 0")
 	}
 	if cfg.Rate > 0 && cfg.Burst == 0 {
 		cfg.Burst = 1
@@ -210,7 +212,7 @@ func (c *Client) SetQueueConfig(ctx context.Context, queue string, cfg QueueConf
 
 // GetQueueConfig returns the queue's settings (zero values if never set).
 func (c *Client) GetQueueConfig(ctx context.Context, queue string) (QueueConfig, error) {
-	if err := keys.ValidateQueue(queue); err != nil {
+	if err := validQueue(queue); err != nil {
 		return QueueConfig{}, err
 	}
 	m, err := c.rdb.HGetAll(ctx, keys.Config(queue)).Result()
@@ -238,7 +240,7 @@ func (c *Client) register(ctx context.Context, queue string) {
 
 // GetJob returns the current record of a job.
 func (c *Client) GetJob(ctx context.Context, queue, id string) (*Job, error) {
-	if err := keys.ValidateQueue(queue); err != nil {
+	if err := validQueue(queue); err != nil {
 		return nil, err
 	}
 	m, err := c.rdb.HGetAll(ctx, keys.Job(queue, id)).Result()
@@ -255,7 +257,7 @@ func (c *Client) GetJob(ctx context.Context, queue, id string) (*Job, error) {
 // first, starting at offset. Offset paging is fine for an operator tool; a
 // DLQ that grows under the reader may shift pages.
 func (c *Client) ListDead(ctx context.Context, queue string, offset, limit int64) ([]*Job, error) {
-	if err := keys.ValidateQueue(queue); err != nil {
+	if err := validQueue(queue); err != nil {
 		return nil, err
 	}
 	if limit <= 0 {
@@ -296,7 +298,7 @@ func (c *Client) getMany(ctx context.Context, queue string, ids []string) ([]*Jo
 // reset. It returns ErrInvalidState if the job is not dead (e.g. a concurrent
 // replay already took it) and ErrNotFound if it no longer exists.
 func (c *Client) ReplayDead(ctx context.Context, queue, id string) error {
-	if err := keys.ValidateQueue(queue); err != nil {
+	if err := validQueue(queue); err != nil {
 		return err
 	}
 	res, err := scripts.Replay.Run(ctx, c.rdb,
@@ -322,7 +324,7 @@ func (c *Client) ReplayDead(ctx context.Context, queue, id string) error {
 // ReplayDeadBatch replays up to limit of the oldest dead jobs and returns how
 // many were replayed. Each replay is individually atomic.
 func (c *Client) ReplayDeadBatch(ctx context.Context, queue string, limit int64) (int, error) {
-	if err := keys.ValidateQueue(queue); err != nil {
+	if err := validQueue(queue); err != nil {
 		return 0, err
 	}
 	ids, err := c.rdb.ZRange(ctx, keys.Dead(queue), 0, limit-1).Result()
@@ -346,7 +348,7 @@ func (c *Client) ReplayDeadBatch(ctx context.Context, queue string, limit int64)
 // PurgeDead deletes dead jobs that died at or before cutoff and returns how
 // many were deleted.
 func (c *Client) PurgeDead(ctx context.Context, queue string, cutoff time.Time) (int, error) {
-	if err := keys.ValidateQueue(queue); err != nil {
+	if err := validQueue(queue); err != nil {
 		return 0, err
 	}
 	const batch = 100
@@ -362,4 +364,95 @@ func (c *Client) PurgeDead(ctx context.Context, queue string, cutoff time.Time) 
 			return total, nil
 		}
 	}
+}
+
+// PriorityStats describes one priority stream.
+type PriorityStats struct {
+	// Waiting entries have not been delivered to any worker yet.
+	Waiting int64 `json:"waiting"`
+	// InFlight entries were delivered and not yet acknowledged (the PEL).
+	InFlight int64 `json:"in_flight"`
+}
+
+// Stats is a point-in-time view of a queue. Fields are read in one
+// pipeline but not atomically, so they may be mutually inconsistent by a
+// few jobs under load.
+type Stats struct {
+	Queue      string                   `json:"queue"`
+	Priorities map[string]PriorityStats `json:"priorities"`
+	Scheduled  int64                    `json:"scheduled"` // delayed + retry-waiting
+	Dead       int64                    `json:"dead"`
+}
+
+// Stats returns queue depth by priority, in-flight, scheduled and dead
+// counts.
+func (c *Client) Stats(ctx context.Context, queue string) (Stats, error) {
+	if err := validQueue(queue); err != nil {
+		return Stats{}, err
+	}
+	pipe := c.rdb.Pipeline()
+	streams := keys.Streams(queue)
+	lens := make([]*redis.IntCmd, len(streams))
+	pels := make([]*redis.XPendingCmd, len(streams))
+	for i, s := range streams {
+		lens[i] = pipe.XLen(ctx, s)
+		pels[i] = pipe.XPending(ctx, s, keys.Group)
+	}
+	sched := pipe.ZCard(ctx, keys.Sched(queue))
+	dead := pipe.ZCard(ctx, keys.Dead(queue))
+	_, _ = pipe.Exec(ctx) // per-command errors are inspected below
+
+	st := Stats{Queue: queue, Priorities: map[string]PriorityStats{}}
+	for i, p := range keys.Priorities {
+		n, err := lens[i].Result()
+		if err != nil {
+			return Stats{}, fmt.Errorf("taskq: stats: %w", err)
+		}
+		var inflight int64
+		if pr, err := pels[i].Result(); err == nil {
+			inflight = pr.Count
+		} else if !isNoGroup(err) {
+			return Stats{}, fmt.Errorf("taskq: stats: %w", err)
+		}
+		st.Priorities[p] = PriorityStats{Waiting: n - inflight, InFlight: inflight}
+	}
+	var err error
+	if st.Scheduled, err = sched.Result(); err != nil {
+		return Stats{}, fmt.Errorf("taskq: stats: %w", err)
+	}
+	if st.Dead, err = dead.Result(); err != nil {
+		return Stats{}, fmt.Errorf("taskq: stats: %w", err)
+	}
+	return st, nil
+}
+
+// isNoGroup reports a missing stream or consumer group: no worker has run on
+// that queue yet, which for stats simply means nothing is in flight.
+func isNoGroup(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "NOGROUP")
+}
+
+// ListQueues returns every queue that has been enqueued to or configured.
+func (c *Client) ListQueues(ctx context.Context) ([]string, error) {
+	qs, err := c.rdb.SMembers(ctx, keys.Queues).Result()
+	if err != nil {
+		return nil, fmt.Errorf("taskq: list queues: %w", err)
+	}
+	sort.Strings(qs)
+	return qs, nil
+}
+
+// ErrInvalidArgument wraps every input-validation error returned by the
+// client, so callers (such as the HTTP API) can map them to "bad request".
+var ErrInvalidArgument = errors.New("taskq: invalid argument")
+
+func invalidf(format string, args ...any) error {
+	return fmt.Errorf("%w: "+format, append([]any{ErrInvalidArgument}, args...)...)
+}
+
+func validQueue(q string) error {
+	if err := keys.ValidateQueue(q); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	return nil
 }

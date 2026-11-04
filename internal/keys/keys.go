@@ -33,7 +33,7 @@ var queueRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 // or are unreasonably long.
 func ValidateQueue(q string) error {
 	if !queueRe.MatchString(q) {
-		return fmt.Errorf("taskq: invalid queue name %q (want [A-Za-z0-9_.-]{1,64})", q)
+		return fmt.Errorf("invalid queue name %q (want [A-Za-z0-9_.-]{1,64})", q)
 	}
 	return nil
 }
