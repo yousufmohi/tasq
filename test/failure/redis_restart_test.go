@@ -10,6 +10,7 @@ import (
 	"github.com/yousufmo27/taskq"
 	"github.com/yousufmo27/taskq/internal/demo"
 	"github.com/yousufmo27/taskq/internal/testutil"
+	"github.com/yousufmo27/taskq/internal/verify"
 )
 
 type restartCase struct {
@@ -102,12 +103,12 @@ func runRestart(t *testing.T, tc restartCase) {
 	p.Stop()
 	acked := p.Acked()
 
-	if err := testutil.WaitSettled(ctx, qrdb, q, acked, 2*time.Minute); err != nil {
+	if err := verify.WaitSettled(ctx, qrdb, q, acked, 2*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	f.stop()
 
-	rep, err := testutil.VerifyWith(ctx, qrdb, rec, q, acked)
+	rep, err := verify.VerifyWith(ctx, qrdb, rec, q, acked)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +118,7 @@ func runRestart(t *testing.T, tc restartCase) {
 		"acked_before_disruption": ackedBefore, "enqueue_errors": p.failed,
 		"outage_ms": outage.Milliseconds(),
 	}
-	testutil.Publish(t, rep)
+	verify.Publish(t, rep)
 
 	if rep.SucceededWithoutExecution != 0 {
 		t.Fatalf("%d jobs succeeded without executing", rep.SucceededWithoutExecution)

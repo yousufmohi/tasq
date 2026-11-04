@@ -27,7 +27,7 @@ for _, id in ipairs(ids) do
   -- A missing hash or a job in any other state has nothing to promote; the
   -- ZSET member was stale and removing it is the only correct action.
   if allowed(f[1], ARGV[3]) then
-    local eid = redis.call('XADD', ARGV[1] .. 's:' .. f[2], '*', 'id', id)
+    local eid = redis.call('XADD', ARGV[1] .. 's:' .. priority(f[2]), '*', 'id', id)
     redis.call('HSET', jk, 'state', 'pending', 'stream_entry', eid)
     moved = moved + 1
   end

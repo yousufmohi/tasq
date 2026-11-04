@@ -17,6 +17,7 @@ import (
 	"github.com/yousufmo27/taskq"
 	"github.com/yousufmo27/taskq/internal/demo"
 	"github.com/yousufmo27/taskq/internal/testutil"
+	"github.com/yousufmo27/taskq/internal/verify"
 	"github.com/yousufmo27/taskq/worker"
 )
 
@@ -80,14 +81,14 @@ func enqueueN(t *testing.T, c *taskq.Client, q string, n int, p demo.Payload) []
 
 // finish waits for every acked job to finish, verifies, and asserts no loss.
 // The caller publishes the report.
-func finish(t *testing.T, env *netEnv, q string, acked []string, extra map[string]any) testutil.Report {
+func finish(t *testing.T, env *netEnv, q string, acked []string, extra map[string]any) verify.Report {
 	t.Helper()
 	ctx := context.Background()
 	qrdb := env.Redis.Client(t)
-	if err := testutil.WaitTerminal(ctx, qrdb, q, acked, 2*time.Minute); err != nil {
+	if err := verify.WaitTerminal(ctx, qrdb, q, acked, 2*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := testutil.VerifyWith(ctx, qrdb, recorder(t), q, acked)
+	rep, err := verify.VerifyWith(ctx, qrdb, recorder(t), q, acked)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestToxiproxyLatency(t *testing.T) {
 	took := time.Since(t0)
 	rep.Extra = map[string]any{"latency_ms_each_way": "50±10", "workers": 2, "concurrency": 8,
 		"seconds_to_drain_300_jobs": took.Seconds()}
-	testutil.Publish(t, rep)
+	verify.Publish(t, rep)
 }
 
 // TestToxiproxyPartitionOneWorker: worker A reaches Redis through the
@@ -157,7 +158,7 @@ func TestToxiproxyPartitionOneWorker(t *testing.T) {
 		"visibility_timeout": vt.String(), "partition": "4s silent (timeout toxic) on worker A only",
 		"a_in_flight_at_cut": inFlightAtCut, "seconds_from_cut_to_all_done": time.Since(cut).Seconds(),
 	}
-	testutil.Publish(t, rep)
+	verify.Publish(t, rep)
 	if rep.Reclaimed == 0 {
 		t.Fatal("no job was reclaimed: the partition did not exercise recovery")
 	}
@@ -189,5 +190,5 @@ func TestToxiproxyConnectionResets(t *testing.T) {
 		flaps++
 	}
 	rep := finish(t, env, q, acked, map[string]any{"flaps": fmt.Sprintf("%d x (150ms down, 150ms up)", flaps)})
-	testutil.Publish(t, rep)
+	verify.Publish(t, rep)
 }

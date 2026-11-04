@@ -12,6 +12,7 @@ import (
 	"github.com/yousufmo27/taskq/internal/demo"
 	"github.com/yousufmo27/taskq/internal/keys"
 	"github.com/yousufmo27/taskq/internal/testutil"
+	"github.com/yousufmo27/taskq/internal/verify"
 )
 
 // TestSIGKILLWorkersMidJob runs 4 worker processes, SIGKILLs one at random
@@ -58,12 +59,12 @@ func TestSIGKILLWorkersMidJob(t *testing.T) {
 		time.Sleep(700 * time.Millisecond)
 	}
 
-	if err := testutil.WaitTerminal(ctx, rdb, q, acked, 2*time.Minute); err != nil {
+	if err := verify.WaitTerminal(ctx, rdb, q, acked, 2*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	f.stop()
 
-	r, err := testutil.Verify(ctx, rdb, q, acked)
+	r, err := verify.Verify(ctx, rdb, q, acked)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestSIGKILLWorkersMidJob(t *testing.T) {
 		"worker_processes": 4, "concurrency": 8, "visibility_timeout": "1500ms",
 		"sigkills": f.kills, "processes_started": f.started,
 	}
-	testutil.Publish(t, r)
+	verify.Publish(t, r)
 
 	if r.Lost != 0 {
 		t.Fatalf("LOST %d acknowledged jobs: %v", r.Lost, r.LostIDs)

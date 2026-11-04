@@ -20,7 +20,7 @@ if not allowed(f[1], ARGV[2]) then
 end
 
 local now = fmt(now_ms())
-local eid = redis.call('XADD', ARGV[1] .. 's:' .. f[2], '*', 'id', ARGV[3])
+local eid = redis.call('XADD', ARGV[1] .. 's:' .. priority(f[2]), '*', 'id', ARGV[3])
 redis.call('ZREM', KEYS[2], ARGV[3])
 redis.call('HSET', KEYS[1], 'state', 'pending', 'attempts', '0',
   'stream_entry', eid, 'run_at_ms', now)

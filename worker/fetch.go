@@ -220,6 +220,16 @@ func (w *Worker) reclaim(ctx context.Context) (*delivery, error) {
 		// here would run it twice in this process.
 		return nil, nil
 	}
+	// An entry we buffered but have not started yet can sit in our own PEL
+	// past the visibility timeout when we stay saturated, and our own
+	// XAUTOCLAIM then picks it up. It must leave the buffer, or it would be
+	// started twice by this process.
+	for i, b := range w.buffer {
+		if b.msg.ID == msgs[0].ID {
+			w.buffer = append(w.buffer[:i], w.buffer[i+1:]...)
+			break
+		}
+	}
 	w.log.Info("reclaimed expired lease", "entry", msgs[0].ID, "stream", s)
 	return &delivery{stream: s, msg: msgs[0], reclaimed: true}, nil
 }

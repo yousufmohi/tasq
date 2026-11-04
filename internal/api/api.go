@@ -79,7 +79,7 @@ func (s *Server) Handler() http.Handler {
 	if s.opts.Registry != nil {
 		mux.Handle("GET /metrics", promhttp.HandlerFor(s.opts.Registry, promhttp.HandlerOpts{}))
 	}
-	return s.m.instrument(mux)
+	return s.m.instrument(s.accessLog(mux))
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
@@ -371,6 +371,10 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		}
 		return false
 	}
+	if dec.More() {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: trailing data after the object")
+		return false
+	}
 	return true
 }
 
@@ -382,4 +386,21 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// accessLog writes one structured line per request (method, route pattern,
+// status, duration). Probe and scrape endpoints are skipped as noise.
+func (s *Server) accessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz", "/readyz", "/metrics":
+			next.ServeHTTP(w, r)
+			return
+		}
+		t0 := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		s.log.Info("http request", "method", r.Method, "route", r.Pattern, "path", r.URL.Path,
+			"status", rec.code, "duration_ms", float64(time.Since(t0).Microseconds())/1000)
+	})
 }

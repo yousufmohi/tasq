@@ -75,7 +75,18 @@ func (w *Worker) process(ctx, handlerBase context.Context, d delivery) {
 	flat, _ := rest[0].([]any)
 	j, err := job.FromFlat(flat)
 	if err != nil {
-		log.Error("decode job", "err", err)
+		// The hash is damaged and would fail identically on every attempt:
+		// dead-letter it now rather than letting it crash-loop through
+		// reclaims until its attempts run out.
+		log.Error("undecodable job; dead-lettering", "err", err)
+		_, ferr := scripts.Fail.Run(ctx, w.rdb,
+			[]string{jkey, d.stream, keys.Sched(q), keys.Dead(q)},
+			keys.Group, d.msg.ID, token, "decode job: "+err.Error(), 0, "1",
+			state.SourcesCSV(state.Fail)).Result()
+		if ferr != nil {
+			log.Error("dead-letter undecodable job", "err", ferr)
+		}
+		w.metrics.outcome(q, OutcomeDead, 0)
 		return
 	}
 	w.metrics.jobStarted(q, j.Priority, j.StartedAt.Sub(j.RunAt), d.reclaimed)

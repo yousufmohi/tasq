@@ -402,8 +402,9 @@ func (c *Client) ListDead(ctx context.Context, queue string, offset, limit int64
 	if err := validQueue(queue); err != nil {
 		return nil, err
 	}
-	if limit <= 0 {
-		return nil, nil
+	if offset < 0 || limit <= 0 {
+		// Redis would read a negative index from the end of the set.
+		return nil, invalidf("offset must be >= 0 and limit > 0")
 	}
 	ids, err := c.rdb.ZRange(ctx, keys.Dead(queue), offset, offset+limit-1).Result()
 	if err != nil {
@@ -468,6 +469,10 @@ func (c *Client) ReplayDead(ctx context.Context, queue, id string) error {
 func (c *Client) ReplayDeadBatch(ctx context.Context, queue string, limit int64) (int, error) {
 	if err := validQueue(queue); err != nil {
 		return 0, err
+	}
+	if limit <= 0 {
+		// ZRANGE 0 -1 would replay the entire dead-letter set.
+		return 0, invalidf("limit must be > 0")
 	}
 	ids, err := c.rdb.ZRange(ctx, keys.Dead(queue), 0, limit-1).Result()
 	if err != nil {

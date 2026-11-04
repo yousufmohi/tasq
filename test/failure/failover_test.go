@@ -17,6 +17,7 @@ import (
 	"github.com/yousufmo27/taskq"
 	"github.com/yousufmo27/taskq/internal/keys"
 	"github.com/yousufmo27/taskq/internal/testutil"
+	"github.com/yousufmo27/taskq/internal/verify"
 )
 
 // TestFailoverDemo demonstrates what asynchronous replication loses in a
@@ -109,7 +110,7 @@ func TestFailoverDemo(t *testing.T) {
 			acked := p.Acked()
 			lost := countMissing(t, rrdb, q, acked)
 
-			rep := testutil.Report{
+			rep := verify.Report{
 				Test:  "TestFailoverDemo/" + mode.name,
 				Acked: len(acked), Lost: lost,
 				Extra: map[string]any{
@@ -124,7 +125,7 @@ func TestFailoverDemo(t *testing.T) {
 					"note":                             "demonstration: loss without WAIT is expected Redis behaviour, not a taskq bug",
 				},
 			}
-			testutil.Publish(t, rep)
+			verify.Publish(t, rep)
 			if mode.dur.Replicas > 0 && lost != 0 {
 				t.Fatalf("WAIT-acked jobs lost on failover: %d", lost)
 			}

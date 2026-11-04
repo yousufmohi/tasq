@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      failure_suite:
+        description: Also run the failure-injection suite
+        type: boolean
+        default: false
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: make lint
+
+  test:
+    # Unit + integration tests against real Redis (testcontainers uses the
+    # runner's Docker), all with the race detector.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: make test
+
+  failure:
+    if: github.event_name == 'workflow_dispatch' && inputs.failure_suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: make failure RESULTS=$PWD/ci-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: failure-reports, path: ci-results/failure }

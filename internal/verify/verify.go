@@ -1,4 +1,6 @@
-package testutil
+// Package verify checks the outcome of failure tests: which acknowledged
+// jobs were lost, and how many executions and side effects were duplicated.
+package verify
 
 import (
 	"context"
@@ -6,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"testing"
 	"time"
@@ -177,6 +180,8 @@ func Publish(t testing.TB, r Report) {
 		t.Errorf("write report: %v", err)
 	}
 }
+
+var unsafe = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 
 func sanitize(s string) string { return unsafe.ReplaceAllString(s, "_") }
 

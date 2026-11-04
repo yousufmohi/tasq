@@ -1,7 +1,10 @@
 # taskq: Design
 
-Status: **draft for review**. Nothing here is implemented yet. Numbers in this
-document are configuration defaults, not measurements.
+Status: **approved 2026-11-03 and implemented.** Where implementation refined
+the design, this document was updated in place, and `docs/MILESTONES.md`
+records why. Numbers here are configuration defaults unless a test or
+benchmark is cited. Measured results live in `results/failure/` and
+`bench/results/`, and are summarised in the README and `docs/FAILURE_MODES.md`.
 
 ## 1. Goals and non-goals
 
@@ -217,11 +220,14 @@ pass the existence check. `MULTI` can't express "check, then conditionally
 write". `WATCH`/`MULTI` could, but it retries under contention, and Lua is
 simpler to reason about.
 
-**Optional durability:** `Enqueue(..., Durability: WaitReplicas(1, 100ms) |
-WaitAOF(1, 0, …))` follows the script with `WAIT` / `WAITAOF`. If the wait
-times out, the result is **uncertain**, not failed. The client returns
-`ErrDurabilityUncertain`, and the producer can safely retry with the same
-idempotency key. (See section 8 for what this does and doesn't buy.)
+**Optional durability:** `EnqueueOptions.Durability{LocalFsync, Replicas,
+Timeout}` follows the script with `WAITAOF 1 <replicas>` or `WAIT <replicas>`.
+Both only cover writes made earlier on *the same connection*, so the
+script (as `EVAL`, which a flushed script cache can't fail) and the wait go
+in one pipeline. If the wait times out, the result is **uncertain**, not
+failed. The client returns the job ID with `ErrDurabilityUncertain`, and the
+producer can safely retry with the same idempotency key. (See section 8 for
+what this does and doesn't buy, and `TestFailoverDemo` for measurements.)
 
 ### 6.2 Fetch with priorities and starvation prevention
 
@@ -229,9 +235,14 @@ Each queue has three streams. Each fetch:
 
 1. Compute a weighted-random order over priorities (default weights
    high:6, default:3, low:1) in Go.
-2. Try non-blocking `XREADGROUP COUNT n` on each stream in that order and
-   take from the first non-empty one.
+2. In one round trip (`fetch.lua`), try non-blocking `XREADGROUP COUNT n`
+   on each stream in that order and take from the first non-empty one.
+   `n` is the number of free concurrency slots, so a worker never claims
+   more than it can start.
 3. If all are empty, block on all three with `XREADGROUP BLOCK 1000`.
+   COUNT applies per stream, so this can return up to three entries; any
+   beyond the free slots are buffered. They're already in this worker's PEL,
+   and `start.lua`'s ownership check makes them harmless if they wait too long.
 
 Under sustained backlog on every level, `low` is tried first in ~10% of
 fetches. Its expected share of throughput therefore never drops below
@@ -244,8 +255,13 @@ jobs' priority) needs a periodic rescoring scan and gives no simple bound. A
 **single ZSET used as a priority queue** loses consumer groups, the PEL, and
 `XAUTOCLAIM`, so I'd have to rebuild them.
 
-*Cost:* up to 3 round trips per fetch when higher priorities are empty. This is
-measured in the benchmark. If it matters, batching (`COUNT n`) amortises it.
+*Cost, as implemented:* one round trip per fetch, for up to `n` jobs. The
+first version tried each stream from the client, one entry per round trip.
+Under 50 ms of injected latency it took 39.4 s to drain 300 jobs. Moving the
+reads into `fetch.lua` cut that to 21.4 s, and batching up to the free slots
+cut it to 9.1 s (`TestToxiproxyLatency`). Batching doesn't change the
+weighting: which stream a fetch picks is still weighted, and batch size
+doesn't depend on the stream picked.
 
 ### 6.3 Start, leases, and fencing: `start.lua`
 
@@ -406,14 +422,27 @@ and have zero pending entries, using the same atomic check.
 | `replay.lua` | ZREM dead + reset + XADD + state | double replay, vanished replay |
 | `ratelimit.lua` | read TAT + compare + write | rate overshoot under concurrent workers |
 | `delconsumer.lua` | pending==0 check + DELCONSUMER | dropping PEL entries |
+| `fetch.lua` | weighted non-blocking reads (*latency, not atomicity*) | one round trip per stream tried |
+
+Atomicity outside Lua: `Durability` pipelines `EVAL` + `WAIT`/`WAITAOF` on one
+connection. That isn't for atomicity; WAIT only observes the connection's own
+earlier writes.
 
 **Two properties of Lua that the scripts rely on:**
 
 - A script is atomic with respect to other clients, but **there's no rollback**:
   if it errors halfway, earlier writes stay. Every script therefore validates
-  all inputs and reads first and only then writes. Unit tests drive each error
-  path and assert that nothing was written.
+  all inputs and reads first and only then writes. Integration tests drive the
+  rejection paths (illegal states for complete/fail/replay/promote, stale lease
+  tokens for complete/fail/heartbeat) and assert that nothing was written.
 - Scripts block Redis while they run, so every loop is bounded (`LIMIT`/`COUNT`).
+- Under `noeviction` at `maxmemory`, Redis rejects a script with OOM only on its
+  *first* write (`scriptVerifyOOM`: once a script has written, it is allowed to
+  finish). Combined with validating before writing, a full Redis yields a clean
+  rejection, never a half-applied change (`TestEnqueueFailsLoudlyWhenRedisIsFull`
+  checks that no orphan hash is left).
+- Scripts derive damaged-field fallbacks (an unknown priority becomes `default`)
+  instead of raising mid-script, because a Lua error after a write is a partial write.
 
 Script effects replicate and persist to AOF as a `MULTI`/`EXEC` unit, so a
 replica or AOF reload sees all of a script's writes or none of them.

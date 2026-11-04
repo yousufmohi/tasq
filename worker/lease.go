@@ -90,41 +90,66 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 	}
 }
 
+// heartbeatParallelism bounds concurrent renewals. Renewals run in parallel
+// so that during a partition (each call taking up to HeartbeatInterval/2)
+// one pass still finishes in about one call's time, and self-fencing is not
+// delayed for jobs late in the list.
+const heartbeatParallelism = 16
+
 func (w *Worker) heartbeatOnce(ctx context.Context) {
-	deadline := w.opts.VisibilityTimeout - w.opts.HeartbeatInterval
+	sem := make(chan struct{}, heartbeatParallelism)
+	var wg sync.WaitGroup
 	for _, f := range w.leases.snapshot() {
-		// Bound each call so that a partition cannot stall the loop past the
-		// self-fencing deadline of the other jobs.
-		hctx, cancel := context.WithTimeout(ctx, w.opts.HeartbeatInterval/2)
-		done := w.metrics.scriptTimer("heartbeat")
-		res, err := scripts.Heartbeat.Run(hctx, w.rdb, []string{f.jkey, f.stream},
-			keys.Group, f.entry, w.opts.Consumer, f.token,
-			w.opts.VisibilityTimeout.Milliseconds()).Result()
-		cancel()
-		done()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if time.Since(f.lastRenewed) > deadline {
-				w.log.Warn("lease renewal failing past safety margin; cancelling handler",
-					"entry", f.entry, "err", err)
-				w.metrics.lostLease(w.opts.Queue, "renewal_failed")
-				f.cancel(errLeaseExpired)
-				w.leases.remove(f.entry)
-			} else {
-				w.log.Warn("heartbeat failed", "entry", f.entry, "err", err)
-			}
-			continue
-		}
-		status, rest, _ := scripts.Status(res)
-		if status == "OK" {
-			f.lastRenewed = time.Now()
-			continue
-		}
-		w.log.Warn("lease lost; cancelling handler", "entry", f.entry, "reason", rest)
-		w.metrics.lostLease(w.opts.Queue, "taken_over")
-		f.cancel(errLeaseLost)
-		w.leases.remove(f.entry)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			w.renew(ctx, f)
+		}()
 	}
+	wg.Wait()
+}
+
+// renew extends one lease, or cancels its handler if the lease is lost or
+// has gone unrenewed past the self-fencing deadline. Only this goroutine
+// touches f.lastRenewed during a pass.
+func (w *Worker) renew(ctx context.Context, f *inflight) {
+	// Bound each call so that a partition cannot stall the pass.
+	hctx, cancel := context.WithTimeout(ctx, w.opts.HeartbeatInterval/2)
+	done := w.metrics.scriptTimer("heartbeat")
+	res, err := scripts.Heartbeat.Run(hctx, w.rdb, []string{f.jkey, f.stream},
+		keys.Group, f.entry, w.opts.Consumer, f.token,
+		w.opts.VisibilityTimeout.Milliseconds()).Result()
+	cancel()
+	done()
+	if !w.leases.has(f.entry) {
+		// The job finished while this renewal was in flight (its entry was
+		// acked, so Redis reports it as no longer pending). Not a lease loss.
+		return
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Since(f.lastRenewed) > w.opts.VisibilityTimeout-w.opts.HeartbeatInterval {
+			w.log.Warn("lease renewal failing past safety margin; cancelling handler",
+				"entry", f.entry, "err", err)
+			w.metrics.lostLease(w.opts.Queue, "renewal_failed")
+			f.cancel(errLeaseExpired)
+			w.leases.remove(f.entry)
+		} else {
+			w.log.Warn("heartbeat failed", "entry", f.entry, "err", err)
+		}
+		return
+	}
+	status, rest, _ := scripts.Status(res)
+	if status == "OK" {
+		f.lastRenewed = time.Now()
+		return
+	}
+	w.log.Warn("lease lost; cancelling handler", "entry", f.entry, "reason", rest)
+	w.metrics.lostLease(w.opts.Queue, "taken_over")
+	f.cancel(errLeaseLost)
+	w.leases.remove(f.entry)
 }

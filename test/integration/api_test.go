@@ -129,6 +129,7 @@ func TestAPIValidationAndErrors(t *testing.T) {
 		{"POST", "/v1/queues/" + q + "/jobs", map[string]any{"type": "x", "priority": "p0"}, 400}, // bad priority
 		{"POST", "/v1/queues/" + q + "/jobs", map[string]any{"type": "x", "bogus": 1}, 400},       // unknown field
 		{"POST", "/v1/queues/" + q + "/jobs", "{not json", 400},
+		{"POST", "/v1/queues/" + q + "/jobs", `{"type":"x"} {"type":"y"}`, 400}, // trailing data
 		{"POST", "/v1/queues/bad:name/jobs", map[string]any{"type": "x"}, 400},
 		{"POST", "/v1/queues/" + q + "/jobs", `{"type":"x","payload":"` + strings.Repeat("a", api.MaxBodyBytes) + `"}`, 413},
 		{"GET", "/v1/queues/" + q + "/jobs/nope", nil, 404},

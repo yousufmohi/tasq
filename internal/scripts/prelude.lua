@@ -32,3 +32,12 @@ local function ack_del(stream, group, eid)
   redis.call('XACK', stream, group, eid)
   redis.call('XDEL', stream, eid)
 end
+
+-- A job's priority stream suffix. Enqueue validates priorities, so an
+-- unknown or missing value means a damaged hash; falling back to 'default'
+-- keeps the job runnable instead of raising a Lua error halfway through a
+-- script (Lua has no rollback, so that would be a partial write).
+local function priority(p)
+  if p == 'high' or p == 'default' or p == 'low' then return p end
+  return 'default'
+end
