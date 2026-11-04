@@ -31,6 +31,8 @@ var (
 	purgeSrc string
 	//go:embed heartbeat.lua
 	heartbeatSrc string
+	//go:embed ratelimit.lua
+	ratelimitSrc string
 )
 
 var (
@@ -42,6 +44,7 @@ var (
 	Replay    = redis.NewScript(prelude + replaySrc)
 	Purge     = redis.NewScript(prelude + purgeSrc)
 	Heartbeat = redis.NewScript(prelude + heartbeatSrc)
+	RateLimit = redis.NewScript(prelude + ratelimitSrc)
 )
 
 // Status extracts the leading status string from a script reply of the form

@@ -79,16 +79,17 @@ func newWorkerOpts(t *testing.T, rdb redis.UniversalClient, o worker.Options, h 
 func assertDrained(t *testing.T, rdb redis.UniversalClient, q string) {
 	t.Helper()
 	ctx := context.Background()
-	s := keys.Stream(q, keys.DefaultPriority)
-	if n := rdb.XLen(ctx, s).Val(); n != 0 {
-		t.Errorf("stream still has %d entries", n)
-	}
-	p, err := rdb.XPending(ctx, s, keys.Group).Result()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Count != 0 {
-		t.Errorf("PEL still has %d entries", p.Count)
+	for _, s := range keys.Streams(q) {
+		if n := rdb.XLen(ctx, s).Val(); n != 0 {
+			t.Errorf("%s still has %d entries", s, n)
+		}
+		p, err := rdb.XPending(ctx, s, keys.Group).Result()
+		if err != nil && !strings.Contains(err.Error(), "NOGROUP") {
+			t.Fatal(err)
+		}
+		if p != nil && p.Count != 0 {
+			t.Errorf("%s PEL still has %d entries", s, p.Count)
+		}
 	}
 }
 

@@ -1,18 +1,40 @@
 -- enqueue: create a job record and either its stream entry (run now) or its
--- sched ZSET member (run later), atomically.
+-- sched ZSET member (run later), atomically, subject to the queue's depth
+-- limit.
 --
--- KEYS[1] job hash   KEYS[2] stream   KEYS[3] sched
+-- KEYS[1] job hash  KEYS[2] sched  KEYS[3] cfg
+-- KEYS[4] high stream  KEYS[5] default stream  KEYS[6] low stream
 -- ARGV[1] id  ARGV[2] queue  ARGV[3] type  ARGV[4] payload
--- ARGV[5] max_attempts  ARGV[6] priority  ARGV[7] timeout ms (0 = none)
+-- ARGV[5] max_attempts  ARGV[6] priority (high|default|low)
+-- ARGV[7] timeout ms (0 = none)
 -- ARGV[8] delay ms (0 = run now), relative to the Redis clock
 --
--- Returns {'OK', created_ms} or {'EXISTS', ''}.
+-- Returns {'OK', created_ms} | {'EXISTS', ''} | {'FULL', depth}.
+--
+-- Depth = entries in all priority streams (undelivered + in flight) + sched
+-- members. It counts every job not yet finished.
 --
 -- Atomic because: a crash between HSET and XADD/ZADD would leave a hash that
--- never runs (or an entry pointing at no hash).
+-- never runs; and the depth check must see the same state the write
+-- changes, or concurrent producers could all pass the check and overshoot.
 
 if redis.call('EXISTS', KEYS[1]) == 1 then
   return {'EXISTS', ''}
+end
+
+local stream
+if ARGV[6] == 'high' then stream = KEYS[4]
+elseif ARGV[6] == 'default' then stream = KEYS[5]
+elseif ARGV[6] == 'low' then stream = KEYS[6]
+else return redis.error_reply('taskq: unknown priority ' .. ARGV[6]) end
+
+local max_depth = tonumber(redis.call('HGET', KEYS[3], 'max_depth')) or 0
+if max_depth > 0 then
+  local depth = redis.call('XLEN', KEYS[4]) + redis.call('XLEN', KEYS[5])
+    + redis.call('XLEN', KEYS[6]) + redis.call('ZCARD', KEYS[2])
+  if depth >= max_depth then
+    return {'FULL', tostring(depth)}
+  end
 end
 
 local now = now_ms()
@@ -26,10 +48,10 @@ redis.call('HSET', KEYS[1],
 
 if delay > 0 then
   local run_at = fmt(now + delay)
-  redis.call('ZADD', KEYS[3], run_at, ARGV[1])
+  redis.call('ZADD', KEYS[2], run_at, ARGV[1])
   redis.call('HSET', KEYS[1], 'state', 'scheduled', 'run_at_ms', run_at)
 else
-  local eid = redis.call('XADD', KEYS[2], '*', 'id', ARGV[1])
+  local eid = redis.call('XADD', stream, '*', 'id', ARGV[1])
   redis.call('HSET', KEYS[1], 'state', 'pending', 'run_at_ms', created,
     'stream_entry', eid)
 end

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -45,6 +46,18 @@ var (
 	// ErrInvalidState is returned when an operation does not apply to the
 	// job's current state (e.g. replaying a job that is not dead).
 	ErrInvalidState = errors.New("taskq: invalid state for operation")
+	// ErrQueueFull is returned by Enqueue when the queue's MaxDepth is
+	// reached. Producers should back off and retry.
+	ErrQueueFull = errors.New("taskq: queue full")
+)
+
+// Priority selects which stream a job is delivered from.
+type Priority string
+
+const (
+	PriorityHigh    Priority = keys.High
+	PriorityDefault Priority = keys.Default
+	PriorityLow     Priority = keys.Low
 )
 
 // Client enqueues and inspects jobs. It is safe for concurrent use.
@@ -60,6 +73,7 @@ func NewClient(rdb redis.UniversalClient) *Client { return &Client{rdb: rdb} }
 type EnqueueOptions struct {
 	Type        string
 	Payload     []byte
+	Priority    Priority      // default PriorityDefault
 	MaxAttempts int           // default DefaultMaxAttempts
 	Timeout     time.Duration // per-attempt handler timeout; 0 = worker default
 
@@ -101,26 +115,84 @@ func (c *Client) Enqueue(ctx context.Context, queue string, o EnqueueOptions) (s
 		}
 		delay = max(time.Until(o.RunAt), 0)
 	}
+	prio := string(o.Priority)
+	if prio == "" {
+		prio = keys.DefaultPriority
+	}
+	if !keys.ValidPriority(prio) {
+		return "", fmt.Errorf("taskq: invalid priority %q", prio)
+	}
 	c.register(ctx, queue)
 	id := job.NewID()
-	prio := keys.DefaultPriority
+	streams := keys.Streams(queue)
 	res, err := scripts.Enqueue.Run(ctx, c.rdb,
-		[]string{keys.Job(queue, id), keys.Stream(queue, prio), keys.Sched(queue)},
+		[]string{keys.Job(queue, id), keys.Sched(queue), keys.Config(queue),
+			streams[0], streams[1], streams[2]},
 		id, queue, o.Type, o.Payload, o.MaxAttempts, prio, o.Timeout.Milliseconds(),
 		delay.Milliseconds(),
 	).Result()
 	if err != nil {
 		return "", fmt.Errorf("taskq: enqueue: %w", err)
 	}
-	status, _, err := scripts.Status(res)
+	status, rest, err := scripts.Status(res)
 	if err != nil {
 		return "", err
 	}
-	if status != "OK" {
+	switch status {
+	case "OK":
+		return id, nil
+	case "FULL":
+		return "", fmt.Errorf("%w (depth %v)", ErrQueueFull, rest[0])
+	default:
 		// A 128-bit random ID collided; treat as a bug rather than retrying.
 		return "", fmt.Errorf("taskq: enqueue: unexpected status %s", status)
 	}
-	return id, nil
+}
+
+// QueueConfig holds runtime settings shared by all producers and workers of
+// a queue. Changes take effect immediately.
+type QueueConfig struct {
+	// MaxDepth rejects enqueues with ErrQueueFull once this many jobs are
+	// unfinished (in streams, in flight, or scheduled). 0 = unlimited.
+	MaxDepth int64
+	// Rate limits job starts across all workers, in jobs per second.
+	// 0 = unlimited.
+	Rate float64
+	// Burst is how many starts may happen back-to-back after an idle
+	// period. Default 1 when Rate is set.
+	Burst int64
+}
+
+// SetQueueConfig stores cfg for queue.
+func (c *Client) SetQueueConfig(ctx context.Context, queue string, cfg QueueConfig) error {
+	if err := keys.ValidateQueue(queue); err != nil {
+		return err
+	}
+	if cfg.MaxDepth < 0 || cfg.Rate < 0 || cfg.Burst < 0 {
+		return errors.New("taskq: queue config values must be >= 0")
+	}
+	if cfg.Rate > 0 && cfg.Burst == 0 {
+		cfg.Burst = 1
+	}
+	c.register(ctx, queue)
+	return c.rdb.HSet(ctx, keys.Config(queue),
+		"max_depth", cfg.MaxDepth, "rate", cfg.Rate, "burst", cfg.Burst).Err()
+}
+
+// GetQueueConfig returns the queue's settings (zero values if never set).
+func (c *Client) GetQueueConfig(ctx context.Context, queue string) (QueueConfig, error) {
+	if err := keys.ValidateQueue(queue); err != nil {
+		return QueueConfig{}, err
+	}
+	m, err := c.rdb.HGetAll(ctx, keys.Config(queue)).Result()
+	if err != nil {
+		return QueueConfig{}, err
+	}
+	var cfg QueueConfig
+	cfg.MaxDepth, _ = strconv.ParseInt(m["max_depth"], 10, 64)
+	cfg.Rate, _ = strconv.ParseFloat(m["rate"], 64)
+	cfg.Burst, _ = strconv.ParseInt(m["burst"], 10, 64)
+	return cfg, nil
 }
 
 // register records the queue name for discovery (API, metrics). It is

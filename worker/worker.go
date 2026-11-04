@@ -60,6 +60,12 @@ type Options struct {
 	// expired. Default VisibilityTimeout/4 (jittered ±20%).
 	ReclaimInterval time.Duration
 
+	// Weights sets each priority level's share when all are backlogged.
+	// Default DefaultWeights (6:3:1). StrictPriority instead always drains
+	// higher levels first, which can starve lower ones indefinitely.
+	Weights        Weights
+	StrictPriority bool
+
 	// SkipPolicyCheck disables the startup check that Redis uses
 	// maxmemory-policy noeviction. Only for Redis deployments that block
 	// CONFIG GET and are known to be configured correctly.
@@ -105,21 +111,31 @@ func (o *Options) setDefaults() error {
 		return fmt.Errorf("worker: HeartbeatInterval (%v) must be < VisibilityTimeout/2 (%v)",
 			o.HeartbeatInterval, o.VisibilityTimeout)
 	}
+	if o.Weights.High < 0 || o.Weights.Default < 0 || o.Weights.Low < 0 {
+		return fmt.Errorf("worker: negative priority weight %+v", o.Weights)
+	}
+	if o.Weights == (Weights{}) {
+		o.Weights = DefaultWeights
+	}
 	return nil
 }
 
 // Worker consumes one queue.
 type Worker struct {
-	rdb    redis.UniversalClient
-	opts   Options
-	h      Handler
-	log    *slog.Logger
-	stream string
-	leases *leases
+	rdb     redis.UniversalClient
+	opts    Options
+	h       Handler
+	log     *slog.Logger
+	streams []string // priority streams, highest first
+	leases  *leases
 
-	// reclaim state; touched only by the fetch loop goroutine.
-	reclaimCursor string
+	// Fetch-loop state; touched only by the goroutine running Run.
+	buffer        []delivery // extra entries from a multi-stream read
+	reclaimCursor []string   // XAUTOCLAIM cursor per stream
+	reclaimIdx    int        // stream currently being scanned
 	nextReclaim   time.Time
+	rateLimited   bool
+	rateCheckedAt time.Time
 }
 
 // New validates options and returns a Worker. It does not touch Redis.
@@ -138,9 +154,9 @@ func New(rdb redis.UniversalClient, opts Options, h Handler) (*Worker, error) {
 		opts:          opts,
 		h:             h,
 		log:           opts.Logger.With("queue", opts.Queue, "consumer", opts.Consumer),
-		stream:        keys.Stream(opts.Queue, keys.DefaultPriority),
+		streams:       keys.Streams(opts.Queue),
 		leases:        newLeases(),
-		reclaimCursor: "0-0",
+		reclaimCursor: []string{"0-0", "0-0", "0-0"},
 	}, nil
 }
 
@@ -212,82 +228,15 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-// fetch returns at most one delivery: a reclaimed entry whose lease expired,
-// if a reclaim scan is due and finds one, otherwise a new entry. It returns
-// (nil, nil) when the block timeout expires with nothing to read.
-//
-// If ctx is cancelled after Redis delivered an entry but before the reply
-// was read, the entry sits in this consumer's PEL and is reclaimed later.
-func (w *Worker) fetch(ctx context.Context) (*delivery, error) {
-	if d, err := w.reclaim(ctx); d != nil || err != nil {
-		return d, err
-	}
-	res, err := w.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
-		Group:    keys.Group,
-		Consumer: w.opts.Consumer,
-		Streams:  []string{w.stream, ">"},
-		Count:    1,
-		Block:    w.opts.Block,
-	}).Result()
-	if errors.Is(err, redis.Nil) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	for _, s := range res {
-		for _, m := range s.Messages {
-			return &delivery{stream: s.Stream, msg: m}, nil
-		}
-	}
-	return nil, nil
-}
-
-// reclaim claims one entry that has been idle for longer than the
-// visibility timeout, using XAUTOCLAIM. It walks the PEL with a cursor;
-// once a full pass finds nothing, it waits ReclaimInterval before scanning
-// again. Reclaimed entries go through start.lua like new ones, which rotates
-// the lease token and counts the attempt.
-func (w *Worker) reclaim(ctx context.Context) (*delivery, error) {
-	if time.Now().Before(w.nextReclaim) {
-		return nil, nil
-	}
-	msgs, next, err := w.rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
-		Stream:   w.stream,
-		Group:    keys.Group,
-		Consumer: w.opts.Consumer,
-		MinIdle:  w.opts.VisibilityTimeout,
-		Start:    w.reclaimCursor,
-		Count:    1,
-	}).Result()
-	if err != nil {
-		w.nextReclaim = time.Now().Add(jitter(w.opts.ReclaimInterval))
-		return nil, fmt.Errorf("reclaim: %w", err)
-	}
-	w.reclaimCursor = next
-	if len(msgs) > 0 && w.leases.has(msgs[0].ID) {
-		// Our own in-flight job went idle past the timeout (heartbeats were
-		// failing). The heartbeat loop owns that decision; starting it again
-		// here would run it twice in this process.
-		return nil, nil
-	}
-	if len(msgs) > 0 {
-		w.log.Info("reclaimed expired lease", "entry", msgs[0].ID)
-		return &delivery{stream: w.stream, msg: msgs[0], reclaimed: true}, nil
-	}
-	if next == "0-0" {
-		// Full pass done; nothing more expired right now.
-		w.nextReclaim = time.Now().Add(jitter(w.opts.ReclaimInterval))
-	}
-	return nil, nil
-}
-
-// ensureGroup creates the consumer group at ID 0, not "$": jobs enqueued
-// before the first worker ever started must still be delivered.
+// ensureGroup creates the consumer group on every priority stream at ID 0,
+// not "$": jobs enqueued before the first worker ever started must still be
+// delivered.
 func (w *Worker) ensureGroup(ctx context.Context) error {
-	err := w.rdb.XGroupCreateMkStream(ctx, w.stream, keys.Group, "0").Err()
-	if err != nil && !strings.HasPrefix(err.Error(), "BUSYGROUP") {
-		return fmt.Errorf("worker: create group: %w", err)
+	for _, s := range w.streams {
+		err := w.rdb.XGroupCreateMkStream(ctx, s, keys.Group, "0").Err()
+		if err != nil && !strings.HasPrefix(err.Error(), "BUSYGROUP") {
+			return fmt.Errorf("worker: create group on %s: %w", s, err)
+		}
 	}
 	return nil
 }
