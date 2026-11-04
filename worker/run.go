@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/scripts"
-	"github.com/yousufmo27/taskq/internal/state"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/scripts"
+	"github.com/yousufmohi/tasq/internal/state"
 )
 
 // errShutdown is the cancellation cause handlers see when the drain timeout

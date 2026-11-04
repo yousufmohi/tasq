@@ -15,12 +15,12 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/scripts"
-	"github.com/yousufmo27/taskq/internal/state"
-	"github.com/yousufmo27/taskq/internal/testutil"
-	"github.com/yousufmo27/taskq/worker"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/scripts"
+	"github.com/yousufmohi/tasq/internal/state"
+	"github.com/yousufmohi/tasq/internal/testutil"
+	"github.com/yousufmohi/tasq/worker"
 )
 
 func waitState(t *testing.T, c *taskq.Client, q, id string, want taskq.State) *taskq.Job {

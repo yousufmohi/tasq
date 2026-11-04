@@ -14,10 +14,10 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/toxiproxy"
 	tcnetwork "github.com/testcontainers/testcontainers-go/network"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/testutil"
-	"github.com/yousufmo27/taskq/internal/verify"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/testutil"
+	"github.com/yousufmohi/tasq/internal/verify"
 )
 
 // TestFailoverDemo demonstrates what asynchronous replication loses in a

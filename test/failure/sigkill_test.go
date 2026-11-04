@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/demo"
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/testutil"
-	"github.com/yousufmo27/taskq/internal/verify"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/demo"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/testutil"
+	"github.com/yousufmohi/tasq/internal/verify"
 )
 
 // TestSIGKILLWorkersMidJob runs 4 worker processes, SIGKILLs one at random

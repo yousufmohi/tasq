@@ -17,7 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yousufmo27/taskq"
+	"github.com/yousufmohi/tasq"
 )
 
 // MaxBodyBytes bounds request bodies (and so job payloads via the API).

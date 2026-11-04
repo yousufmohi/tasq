@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/testutil"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/testutil"
 )
 
 func TestMain(m *testing.M) { testutil.Main(m) }

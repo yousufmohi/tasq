@@ -30,7 +30,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yousufmo27/taskq/internal/job"
+	"github.com/yousufmohi/tasq/internal/job"
 )
 
 // ErrInProgress means another caller holds the lock for this key and has

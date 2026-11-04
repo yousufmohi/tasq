@@ -15,10 +15,10 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yousufmo27/taskq/internal/demo"
-	"github.com/yousufmo27/taskq/internal/job"
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/state"
+	"github.com/yousufmohi/tasq/internal/demo"
+	"github.com/yousufmohi/tasq/internal/job"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/state"
 )
 
 // Report is the outcome of a failure test. Every failure test ends by

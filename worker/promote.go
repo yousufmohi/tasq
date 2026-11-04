@@ -5,9 +5,9 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/scripts"
-	"github.com/yousufmo27/taskq/internal/state"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/scripts"
+	"github.com/yousufmohi/tasq/internal/state"
 )
 
 // promoteBatch bounds how many jobs one promote.lua call moves, and so how

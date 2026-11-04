@@ -21,7 +21,7 @@ import (
 	tcnetwork "github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/yousufmo27/taskq/internal/job"
+	"github.com/yousufmohi/tasq/internal/job"
 )
 
 // RedisImage is pinned so results are reproducible.

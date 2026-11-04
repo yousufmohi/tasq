@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/scripts"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/scripts"
 )
 
 var (

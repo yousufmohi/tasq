@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/idem"
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/testutil"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/idem"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/testutil"
 )
 
 func TestEnqueueIdempotencyKeyDeduplicates(t *testing.T) {

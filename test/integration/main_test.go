@@ -6,7 +6,7 @@ package integration
 import (
 	"testing"
 
-	"github.com/yousufmo27/taskq/internal/testutil"
+	"github.com/yousufmohi/tasq/internal/testutil"
 )
 
 func TestMain(m *testing.M) { testutil.Main(m) }

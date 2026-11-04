@@ -20,11 +20,11 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/yousufmo27/taskq/internal/job"
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/obs"
-	"github.com/yousufmo27/taskq/internal/scripts"
-	"github.com/yousufmo27/taskq/internal/state"
+	"github.com/yousufmohi/tasq/internal/job"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/obs"
+	"github.com/yousufmohi/tasq/internal/scripts"
+	"github.com/yousufmohi/tasq/internal/state"
 )
 
 // Job is a snapshot of a job record.

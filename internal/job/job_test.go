@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yousufmo27/taskq/internal/state"
+	"github.com/yousufmohi/tasq/internal/state"
 )
 
 func TestFromFlatRoundTrip(t *testing.T) {

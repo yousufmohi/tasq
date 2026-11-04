@@ -15,10 +15,10 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/job"
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/obs"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/job"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/obs"
 )
 
 // Handler processes one job. Returning nil completes it; returning an error

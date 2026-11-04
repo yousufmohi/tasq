@@ -4,7 +4,7 @@ Status: **approved 2026-11-03 and implemented.** Where implementation refined
 the design, this document was updated in place, and `docs/MILESTONES.md`
 records why. Numbers here are configuration defaults unless a test or
 benchmark is cited. Measured results live in `results/failure/` and
-`bench/results/`, and are summarised in the README and `docs/FAILURE_MODES.md`.
+`bench/results/`, and are summarised in `bench/results/*/summary.md` and `docs/FAILURE_MODES.md`.
 
 ## 1. Goals and non-goals
 

@@ -12,13 +12,13 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/backoff"
-	"github.com/yousufmo27/taskq/internal/job"
-	"github.com/yousufmo27/taskq/internal/keys"
-	"github.com/yousufmo27/taskq/internal/obs"
-	"github.com/yousufmo27/taskq/internal/scripts"
-	"github.com/yousufmo27/taskq/internal/state"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/backoff"
+	"github.com/yousufmohi/tasq/internal/job"
+	"github.com/yousufmohi/tasq/internal/keys"
+	"github.com/yousufmohi/tasq/internal/obs"
+	"github.com/yousufmohi/tasq/internal/scripts"
+	"github.com/yousufmohi/tasq/internal/state"
 )
 
 // maxErrorLen bounds the error message stored on the job hash.

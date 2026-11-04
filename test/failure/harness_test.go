@@ -11,10 +11,10 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/demo"
-	"github.com/yousufmo27/taskq/internal/testutil"
-	"github.com/yousufmo27/taskq/worker"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/demo"
+	"github.com/yousufmohi/tasq/internal/testutil"
+	"github.com/yousufmohi/tasq/worker"
 )
 
 // producer enqueues continuously from several goroutines and records which

@@ -25,9 +25,9 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/idem"
-	"github.com/yousufmo27/taskq/worker"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/idem"
+	"github.com/yousufmohi/tasq/worker"
 )
 
 // Payload is the demo job's input.

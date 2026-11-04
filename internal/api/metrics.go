@@ -9,8 +9,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/keys"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/keys"
 )
 
 type metrics struct {

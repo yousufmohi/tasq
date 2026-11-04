@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yousufmo27/taskq/internal/testutil"
+	"github.com/yousufmohi/tasq/internal/testutil"
 )
 
 // workerBin is the race-enabled taskq-worker binary built for this run.

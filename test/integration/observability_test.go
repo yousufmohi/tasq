@@ -15,10 +15,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/api"
-	"github.com/yousufmo27/taskq/internal/testutil"
-	"github.com/yousufmo27/taskq/worker"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/api"
+	"github.com/yousufmohi/tasq/internal/testutil"
+	"github.com/yousufmohi/tasq/worker"
 )
 
 // metricValue returns the value of the series name{labels} (counter, gauge

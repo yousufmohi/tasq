@@ -17,8 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yousufmo27/taskq/internal/api"
-	"github.com/yousufmo27/taskq/internal/otelsetup"
+	"github.com/yousufmohi/tasq/internal/api"
+	"github.com/yousufmohi/tasq/internal/otelsetup"
 )
 
 func main() {

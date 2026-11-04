@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/yousufmo27/taskq/internal/state"
+	"github.com/yousufmohi/tasq/internal/state"
 )
 
 // Job is a snapshot of a job record.

@@ -1,4 +1,4 @@
-module github.com/yousufmo27/taskq
+module github.com/yousufmohi/tasq
 
 go 1.27.3
 

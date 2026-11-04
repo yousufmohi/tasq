@@ -40,9 +40,9 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yousufmo27/taskq"
-	"github.com/yousufmo27/taskq/internal/demo"
-	"github.com/yousufmo27/taskq/internal/keys"
+	"github.com/yousufmohi/tasq"
+	"github.com/yousufmohi/tasq/internal/demo"
+	"github.com/yousufmohi/tasq/internal/keys"
 )
 
 // Config is recorded verbatim in every result.

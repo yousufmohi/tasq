@@ -16,7 +16,7 @@ import (
 )
 
 // TracerName identifies taskq's instrumentation scope.
-const TracerName = "github.com/yousufmo27/taskq"
+const TracerName = "github.com/yousufmohi/tasq"
 
 // Attribute keys (OpenTelemetry messaging semantic conventions).
 var (

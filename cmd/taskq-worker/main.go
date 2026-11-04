@@ -22,9 +22,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/yousufmo27/taskq/internal/demo"
-	"github.com/yousufmo27/taskq/internal/otelsetup"
-	"github.com/yousufmo27/taskq/worker"
+	"github.com/yousufmohi/tasq/internal/demo"
+	"github.com/yousufmohi/tasq/internal/otelsetup"
+	"github.com/yousufmohi/tasq/worker"
 )
 
 func main() {
