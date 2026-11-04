@@ -257,7 +257,7 @@ jobs' priority) needs a periodic rescoring scan and gives no simple bound. A
 
 *Cost, as implemented:* one round trip per fetch, for up to `n` jobs. The
 first version tried each stream from the client, one entry per round trip.
-Under 50 ms of injected latency it took 39.4 s to drain 300 jobs. Moving the
+Under 50 ms of injected latency it took 39.4 s to drain 300 jobs (development test logs; the final recorded run is in `results/failure/TestToxiproxyLatency.json`). Moving the
 reads into `fetch.lua` cut that to 21.4 s, and batching up to the free slots
 cut it to 9.1 s (`TestToxiproxyLatency`). Batching doesn't change the
 weighting: which stream a fetch picks is still weighted, and batch size
